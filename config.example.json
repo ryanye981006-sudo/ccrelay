@@ -1,0 +1,13 @@
+{
+  "port": 18888,
+  "backend": {
+    "url": "https://your-opencode.example.com/zen/go/v1/chat/completions",
+    "apiKey": "sk-your-api-key-here"
+  },
+  "timeout": 120000,
+  "models": [
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+    "glm-5.1"
+  ]
+}
