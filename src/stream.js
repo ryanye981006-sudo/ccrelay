@@ -13,7 +13,7 @@ function sseEvent(event, data) {
 }
 
 // Anthropic SSE 生成器
-function eventMessageStart(msgId, model) {
+function eventMessageStart(msgId, model, inputTokens) {
   return sseEvent('message_start', {
     type: 'message_start',
     message: {
@@ -24,7 +24,7 @@ function eventMessageStart(msgId, model) {
       content: [],
       stop_reason: null,
       stop_sequence: null,
-      usage: { input_tokens: 0, output_tokens: 0 },
+      usage: { input_tokens: inputTokens || 0, output_tokens: 0 },
     },
   });
 }
@@ -68,14 +68,14 @@ function eventMessageStop() {
 }
 
 class StreamTransformer {
-  constructor(model) {
+  constructor(model, inputTokens) {
     this.msgId = `msg_${randomHex(32)}`;
     this.model = model;
+    this.inputTokens = inputTokens || 0;
     this.started = false;
     this.finished = false;
     this.blockIndex = 0;
     this.currentBlockType = null; // 'thinking' | 'text' | 'tool_use'
-    this.inputTokens = 0;
     this.outputTokens = 0;
     // tool_use 缓冲区: toolCallIndex → { id, name, argsStr }
     this.toolUseBuf = {};
@@ -115,7 +115,7 @@ class StreamTransformer {
     // 首条有效 chunk → message_start
     if (!this.started && (delta.role || delta.content !== undefined || delta.reasoning_content !== undefined || delta.tool_calls)) {
       this.started = true;
-      events.push(eventMessageStart(this.msgId, this.model));
+      events.push(eventMessageStart(this.msgId, this.model, this.inputTokens));
     }
     if (!this.started) return events;
 

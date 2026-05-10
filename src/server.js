@@ -149,7 +149,7 @@ function fetchOpenAI(config, openaiBody, apiKey) {
 }
 
 // 流式转发：OpenAI SSE → Anthropic SSE
-function streamFetchOpenAI(config, openaiBody, res, req) {
+function streamFetchOpenAI(config, openaiBody, res, req, inputTokens) {
   const url = new URL(config.backend.url);
   const isHttps = url.protocol === 'https:';
   const transport = isHttps ? https : http;
@@ -178,7 +178,7 @@ function streamFetchOpenAI(config, openaiBody, res, req) {
     'X-Accel-Buffering': 'no',
   });
 
-  const transformer = new StreamTransformer(openaiBody.model);
+  const transformer = new StreamTransformer(openaiBody.model, inputTokens || 0);
   let buffer = '';
 
   const proxyReq = transport.request(options, (proxyRes) => {
@@ -355,7 +355,8 @@ function createServer(config) {
 
         // 根据是否流式选择处理方式
         if (anthropicBody.stream) {
-          await streamFetchOpenAI(config, openaiBody, res, req);
+          const inputTokens = countTokens(anthropicBody);
+          await streamFetchOpenAI(config, openaiBody, res, req, inputTokens);
         } else {
           const result = await fetchOpenAI(config, openaiBody, apiKey);
           if (result.status === 200) {
