@@ -22,15 +22,23 @@ function chatToResponses(chatBody) {
   const output = [];
   const msgId = `msg_${randomHex(32)}`;
 
-  // 文本内容
+  // 拼接 reasoning_content + content
+  let text = '';
+  if (message.reasoning_content) {
+    text += '<think>\n' + message.reasoning_content + '\n</think>\n';
+  }
   if (message.content) {
+    text += message.content;
+  }
+
+  if (text) {
     output.push({
       id: msgId,
       type: 'message',
       role: 'assistant',
       content: [{
         type: 'output_text',
-        text: message.content,
+        text,
         annotations: [],
       }],
     });

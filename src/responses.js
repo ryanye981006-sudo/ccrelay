@@ -27,6 +27,16 @@ function extractReasoningText(entry) {
   return '';
 }
 
+// 从包含 <think/> 标签的文本中提取 reasoning_content 和实际内容
+function extractThinkContent(text) {
+  if (!text || typeof text !== 'string' || !text.includes('<think')) return { content: text };
+  const match = text.match(/^<think[^>]*>\n?([\s\S]*?)\n?<\/think>\n?([\s\S]*)$/);
+  if (match) {
+    return { reasoning_content: match[1], content: match[2] || '' };
+  }
+  return { content: text };
+}
+
 // input 条目转为 messages[]，处理 function_call / function_call_output
 function convertInputEntry(entry) {
   const entryType = entry.type || entry.role || '';
@@ -64,6 +74,12 @@ function convertInputEntry(entry) {
       .filter(part => part.type === 'input_text' || part.type === 'text' || part.type === 'output_text')
       .map(part => part.text)
       .join('');
+  }
+
+  // assistant 消息：提取 <think/> 标签为 reasoning_content
+  if (role === 'assistant' && content) {
+    const extracted = extractThinkContent(content);
+    return { role, ...extracted };
   }
 
   return { role, content: content || '' };

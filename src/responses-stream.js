@@ -27,6 +27,10 @@ class ResponsesStreamTransformer {
     this.reasoningClosed = false;
     this.fullReasoning = '';
 
+    // think 标签剥离状态: 0=查找<think>, 1=在think内部, 2=已闭合
+    this._thinkState = 0;
+    this._thinkBuf = '';
+
     // text 状态
     this.textItemStarted = false;
     this.fullText = '';
@@ -59,6 +63,48 @@ class ResponsesStreamTransformer {
       this.outputTokens = usage.completion_tokens || 0;
     }
 
+    // 预处理器：从 delta.content 剥离 <think> 标签，转为 delta.reasoning_content
+    // 后端流式返回 <think>\n...\n</think>\n... 格式，需拆分为 reasoning + content
+    if (delta.content) {
+      if (this._thinkState < 2) {
+        this._thinkBuf += delta.content;
+        delta.content = undefined;
+
+        // 状态 0 → 1: 检测 <think> 开始
+        if (this._thinkState === 0) {
+          const idx = this._thinkBuf.indexOf('<think>');
+          if (idx >= 0) {
+            const before = this._thinkBuf.substring(0, idx);
+            this._thinkBuf = this._thinkBuf.substring(idx + 7).replace(/^\n/, '');
+            this._thinkState = 1;
+            if (before) delta.content = before;
+          } else {
+            // <think> 还没出现，继续累积（不太可能但防一下）
+            delta.content = this._thinkBuf;
+            this._thinkBuf = '';
+          }
+        }
+
+        // 状态 1 → 2: 检测 </think> 闭合
+        if (this._thinkState === 1) {
+          const idx = this._thinkBuf.indexOf('</think>');
+          if (idx >= 0) {
+            if (idx > 0) delta.reasoning_content = this._thinkBuf.substring(0, idx);
+            this._thinkBuf = this._thinkBuf.substring(idx + 8).replace(/^\n/, '');
+            this._thinkState = 2;
+            if (this._thinkBuf) {
+              delta.content = (delta.content || '') + this._thinkBuf;
+              this._thinkBuf = '';
+            }
+          } else {
+            // 还在 think 内部，全部作为 reasoning
+            delta.reasoning_content = this._thinkBuf;
+            this._thinkBuf = '';
+          }
+        }
+      }
+    }
+
     const events = [];
 
     // response.created + response.in_progress（首个有意义的 chunk 触发）
@@ -89,8 +135,8 @@ class ResponsesStreamTransformer {
             summary: [],
           },
         }));
-        events.push(sse('response.reasoning_summary_text.added', {
-          type: 'response.reasoning_summary_text.added',
+        events.push(sse('response.reasoning_summary_part.added', {
+          type: 'response.reasoning_summary_part.added',
           item_id: this.reasoningId, output_index: 0, summary_index: 0,
         }));
         events.push(sse('response.reasoning_summary_text.delta', {
@@ -115,6 +161,10 @@ class ResponsesStreamTransformer {
         type: 'response.reasoning_summary_text.done',
         item_id: this.reasoningId, output_index: 0, summary_index: 0,
         text: this.fullReasoning,
+      }));
+      events.push(sse('response.reasoning_summary_part.done', {
+        type: 'response.reasoning_summary_part.done',
+        item_id: this.reasoningId, output_index: 0, summary_index: 0,
       }));
       events.push(sse('response.output_item.done', {
         type: 'response.output_item.done', output_index: 0,
@@ -213,6 +263,10 @@ class ResponsesStreamTransformer {
           type: 'response.reasoning_summary_text.done',
           item_id: this.reasoningId, output_index: 0, summary_index: 0,
           text: this.fullReasoning,
+        }));
+        events.push(sse('response.reasoning_summary_part.done', {
+          type: 'response.reasoning_summary_part.done',
+          item_id: this.reasoningId, output_index: 0, summary_index: 0,
         }));
         const reasoningItem = {
           id: this.reasoningId, type: 'reasoning', status: 'completed',

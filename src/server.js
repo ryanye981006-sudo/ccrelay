@@ -94,23 +94,27 @@ function fetchOpenAI(config, openaiBody) {
   const isHttps = url.protocol === 'https:';
   const transport = isHttps ? https : http;
   const body = JSON.stringify(openaiBody);
+  const tlsOpts = isHttps ? { rejectUnauthorized: config.backend.tls?.rejectUnauthorized ?? true } : {};
   const options = {
     hostname: url.hostname, port: url.port || (isHttps ? 443 : 80),
     path: url.pathname + url.search, method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'Authorization': `Bearer ${config.backend.apiKey}` },
     timeout: config.timeout || 120000,
+    ...tlsOpts,
   };
+  console.log(`[backend] → POST ${url.origin}${options.path} model=${openaiBody.model} stream=${openaiBody.stream} messages=${openaiBody.messages?.length || 0}`);
   return new Promise((resolve, reject) => {
     const proxyReq = transport.request(options, (proxyRes) => {
       let data = '';
       proxyRes.on('data', chunk => { data += chunk; });
       proxyRes.on('end', () => {
+        console.log(`[backend] ← ${proxyRes.statusCode} (${data.length} bytes)`);
         try { resolve({ status: proxyRes.statusCode, headers: proxyRes.headers, body: JSON.parse(data) }); }
         catch { resolve({ status: proxyRes.statusCode, headers: proxyRes.headers, body: data }); }
       });
     });
-    proxyReq.on('error', reject);
-    proxyReq.on('timeout', () => { proxyReq.destroy(); reject(new Error('timeout')); });
+    proxyReq.on('error', (err) => { console.error(`[backend] 连接失败: ${err.message}`); reject(err); });
+    proxyReq.on('timeout', () => { console.error('[backend] 请求超时'); proxyReq.destroy(); reject(new Error('timeout')); });
     proxyReq.write(body);
     proxyReq.end();
   });
@@ -122,12 +126,15 @@ function streamFetchOpenAI(config, openaiBody, res, createTransformer) {
   const isHttps = url.protocol === 'https:';
   const transport = isHttps ? https : http;
   const body = JSON.stringify(openaiBody);
+  const tlsOpts = isHttps ? { rejectUnauthorized: config.backend.tls?.rejectUnauthorized ?? true } : {};
   const options = {
     hostname: url.hostname, port: url.port || (isHttps ? 443 : 80),
     path: url.pathname + url.search, method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'Authorization': `Bearer ${config.backend.apiKey}`, 'Accept': 'text/event-stream' },
     timeout: config.timeout || 120000,
+    ...tlsOpts,
   };
+  console.log(`[backend] → STREAM ${url.origin}${options.path} model=${openaiBody.model} messages=${openaiBody.messages?.length || 0}`);
 
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
 
@@ -135,10 +142,12 @@ function streamFetchOpenAI(config, openaiBody, res, createTransformer) {
   let buffer = '';
 
   const proxyReq = transport.request(options, (proxyRes) => {
+    console.log(`[backend] ← STREAM ${proxyRes.statusCode}`);
     if (proxyRes.statusCode !== 200) {
       let data = '';
       proxyRes.on('data', chunk => { data += chunk; });
       proxyRes.on('end', () => {
+        console.error(`[backend] ← STREAM 错误响应: ${data.substring(0, 500)}`);
         res.write(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: `后端返回 ${proxyRes.statusCode}: ${data}` } })}\n\n`);
         res.end();
       });
@@ -182,10 +191,12 @@ function streamFetchOpenAI(config, openaiBody, res, createTransformer) {
   });
 
   proxyReq.on('error', (err) => {
+    console.error(`[backend] ← STREAM 连接失败: ${err.message}`);
     res.write(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: `后端连接失败: ${err.message}` } })}\n\n`);
     res.end();
   });
   proxyReq.on('timeout', () => {
+    console.error('[backend] ← STREAM 超时');
     proxyReq.destroy();
     res.write(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: '后端请求超时' } })}\n\n`);
     res.end();
@@ -286,9 +297,23 @@ function createServer(config, serverType, serverConfig) {
         try {
           const responsesBody = await readBody(req);
           const isResponses = responsesBody.input !== undefined || responsesBody.instructions !== undefined;
+          console.log(`[codex] ← ${isResponses ? 'Responses' : 'Chat'} model=${responsesBody.model} stream=${responsesBody.stream}`);
           let openaiBody;
           if (isResponses) {
             openaiBody = responsesToChat(responsesBody);
+            // 调试：打印每条消息是否有 reasoning_content
+            for (const [idx, msg] of openaiBody.messages.entries()) {
+              if (msg.role === 'assistant') {
+                console.log(`[codex] msg[${idx}] role=assistant reasoning=${!!msg.reasoning_content} content=${typeof msg.content === 'string' ? msg.content.substring(0, 80) : JSON.stringify(msg.content).substring(0, 80)} tool_calls=${msg.tool_calls?.length || 0}`);
+              }
+            }
+            // 调试：打印原始 input 中的 reasoning 条目
+            if (Array.isArray(responsesBody.input)) {
+              const reasoningEntries = responsesBody.input.filter(e => (e.type || e.role) === 'reasoning');
+              if (reasoningEntries.length > 0) {
+                console.log(`[codex] input 中 reasoning 条目: ${reasoningEntries.length} 个`);
+              }
+            }
           } else {
             openaiBody = responsesBody;
           }
