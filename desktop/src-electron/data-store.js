@@ -1,0 +1,395 @@
+// 数据存储层：读写 ~/.ccrelay-desktop/data.json
+
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+const DATA_DIR = path.join(os.homedir(), '.ccrelay-desktop');
+const DATA_FILE = path.join(DATA_DIR, 'data.json');
+
+// 默认数据结构 — 配置化管理
+const DEFAULT_DATA = {
+  providers: [],
+  models: [],
+  codex: { configs: [], activeConfigId: null },
+  claude: { configs: [], activeConfigId: null }
+};
+
+// 生成简单 ID
+function genId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// 确保数据目录和文件存在
+function ensureDataFile() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(DATA_FILE)) {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(DEFAULT_DATA, null, 2), 'utf-8');
+  }
+}
+
+// ====== 向后兼容：旧数据迁移 ======
+function migrateData(data) {
+  ['codex', 'claude'].forEach(cat => {
+    const c = data[cat];
+    if (!c) {
+      data[cat] = { configs: [], activeConfigId: null };
+      return;
+    }
+    // 旧格式：{ activeModelId, modelIds } → 新格式：{ configs, activeConfigId }（不保留旧模型数据）
+    if (c.modelIds && !c.configs) {
+      data[cat] = { configs: [], activeConfigId: null };
+    }
+  });
+  return data;
+}
+
+// 读取全部数据
+function readData() {
+  ensureDataFile();
+  const raw = fs.readFileSync(DATA_FILE, 'utf-8');
+  let data = JSON.parse(raw);
+  // 检测是否需要迁移旧格式
+  const needsMigration = ['codex', 'claude'].some(cat =>
+    data[cat] && data[cat].modelIds !== undefined && !data[cat].configs
+  );
+  if (needsMigration) {
+    data = migrateData(data);
+    writeData(data);  // 立即持久化新格式
+  }
+  return data;
+}
+
+// 写入全部数据
+function writeData(data) {
+  ensureDataFile();
+  const tmpFile = DATA_FILE + '.tmp';
+  fs.writeFileSync(tmpFile, JSON.stringify(data, null, 2), 'utf-8');
+  fs.renameSync(tmpFile, DATA_FILE);
+}
+
+// ====== URL 拼接（参考 ccswitch 的 build_url 逻辑） ======
+// 端点使用标准路径 /v1/chat/completions、/v1/messages、/v1/models
+// 如果 baseUrl 已有版本路径（如 /v1、/v4），自动去重避免拼接冗余
+function buildApiUrl(baseUrl, endpointPath) {
+  let clean = baseUrl.replace(/\/+$/, '');
+  // 剥离已有端点路径（向后兼容：用户填了完整 chat 端点）
+  clean = clean.replace(/\/(v\d+\/)?(chat\/completions|messages|responses)$/, '');
+  // 剥离版本后缀（避免 base/v1 + /v1/chat/completions → base/v1/v1/chat/completions）
+  clean = clean.replace(/\/v\d+$/, '');
+  return `${clean}${endpointPath}`;
+}
+
+// ====== Provider CRUD ======
+
+function getProviders() {
+  return readData().providers;
+}
+
+function addProvider({ name, apiBaseUrl, apiKey, protocol }) {
+  const data = readData();
+  if (data.providers.find(p => p.name === name)) {
+    throw new Error(`API 源 "${name}" 已存在`);
+  }
+  const provider = { id: genId('p'), name, apiBaseUrl, apiKey, protocol };
+  data.providers.push(provider);
+  writeData(data);
+  return provider;
+}
+
+function updateProvider(id, { name, apiBaseUrl, apiKey, protocol }) {
+  const data = readData();
+  const idx = data.providers.findIndex(p => p.id === id);
+  if (idx === -1) throw new Error(`Provider ${id} 不存在`);
+  if (name !== undefined) data.providers[idx].name = name;
+  if (apiBaseUrl !== undefined) data.providers[idx].apiBaseUrl = apiBaseUrl;
+  if (apiKey !== undefined) data.providers[idx].apiKey = apiKey;
+  if (protocol !== undefined) data.providers[idx].protocol = protocol;
+  writeData(data);
+  return data.providers[idx];
+}
+
+function deleteProvider(id) {
+  const data = readData();
+  // 删除该 Provider 下的所有模型
+  const modelIdsToRemove = data.models.filter(m => m.providerId === id).map(m => m.id);
+  data.models = data.models.filter(m => m.providerId !== id);
+  // 从所有分类的配置中移除关联模型
+  ['codex', 'claude'].forEach(cat => {
+    if (!data[cat] || !data[cat].configs) return;
+    data[cat].configs.forEach(cfg => {
+      cfg.modelIds = cfg.modelIds.filter(mid => !modelIdsToRemove.includes(mid));
+    });
+  });
+  data.providers = data.providers.filter(p => p.id !== id);
+  writeData(data);
+}
+
+// ====== Model CRUD ======
+
+function getModels(providerId) {
+  return readData().models.filter(m => m.providerId === providerId);
+}
+
+function addModel(providerId, name) {
+  const data = readData();
+  if (!data.providers.find(p => p.id === providerId)) {
+    throw new Error(`Provider ${providerId} 不存在`);
+  }
+  const model = { id: genId('m'), providerId, name };
+  data.models.push(model);
+  writeData(data);
+  return model;
+}
+
+function deleteModel(id) {
+  const data = readData();
+  data.models = data.models.filter(m => m.id !== id);
+  // 从所有配置中移除
+  ['codex', 'claude'].forEach(cat => {
+    if (!data[cat] || !data[cat].configs) return;
+    data[cat].configs.forEach(cfg => {
+      cfg.modelIds = cfg.modelIds.filter(mid => mid !== id);
+    });
+  });
+  writeData(data);
+}
+
+// 根据模型 ID 获取模型信息（含关联的 Provider）
+function getModelWithProvider(modelId) {
+  const data = readData();
+  const model = data.models.find(m => m.id === modelId);
+  if (!model) return null;
+  const provider = data.providers.find(p => p.id === model.providerId);
+  return { ...model, provider: provider || null };
+}
+
+// 根据名称查找 Provider
+function findProviderByName(name) {
+  return readData().providers.find(p => p.name === name) || null;
+}
+
+function findProviderById(id) {
+  return readData().providers.find(p => p.id === id) || null;
+}
+
+// 生成模型的路由键：providerName/modelName
+function modelRoutingKey(model) {
+  const provider = model.provider || findProviderById(model.providerId);
+  return `${provider.name}/${model.name}`;
+}
+
+// ====== 配置 CRUD ======
+
+// 创建配置
+function addConfig(category, name) {
+  const data = readData();
+  if (!data[category]) throw new Error(`分类 ${category} 不存在`);
+  if (data[category].configs.find(c => c.name === name)) {
+    throw new Error(`配置 "${name}" 已存在`);
+  }
+  const config = { id: genId('cfg'), name, modelIds: [], createdAt: Date.now() };
+  data[category].configs.push(config);
+  // 如果是第一个配置，自动激活
+  if (!data[category].activeConfigId) {
+    data[category].activeConfigId = config.id;
+  }
+  writeData(data);
+  return config;
+}
+
+// 删除配置
+function deleteConfig(category, configId) {
+  const data = readData();
+  if (!data[category]) throw new Error(`分类 ${category} 不存在`);
+  data[category].configs = data[category].configs.filter(c => c.id !== configId);
+  if (data[category].activeConfigId === configId) {
+    data[category].activeConfigId = data[category].configs[0]?.id || null;
+  }
+  writeData(data);
+}
+
+// 重命名配置
+function renameConfig(category, configId, name) {
+  const data = readData();
+  if (!data[category]) throw new Error(`分类 ${category} 不存在`);
+  const cfg = data[category].configs.find(c => c.id === configId);
+  if (!cfg) throw new Error(`配置 ${configId} 不存在`);
+  cfg.name = name;
+  writeData(data);
+  return cfg;
+}
+
+// 向配置中添加模型（codex 分类限制单模型：替换而非追加）
+function addModelToConfig(category, configId, modelId) {
+  const data = readData();
+  if (!data[category]) throw new Error(`分类 ${category} 不存在`);
+  const cfg = data[category].configs.find(c => c.id === configId);
+  if (!cfg) throw new Error(`配置 ${configId} 不存在`);
+  if (!data.models.find(m => m.id === modelId)) throw new Error(`模型 ${modelId} 不存在`);
+  if (category === 'codex') {
+    // Codex 只允许一个模型：直接替换
+    cfg.modelIds = [modelId];
+  } else {
+    if (!cfg.modelIds.includes(modelId)) {
+      cfg.modelIds.push(modelId);
+    }
+  }
+  writeData(data);
+}
+
+// 从配置中移除模型
+function removeModelFromConfig(category, configId, modelId) {
+  const data = readData();
+  if (!data[category]) return;
+  const cfg = data[category].configs.find(c => c.id === configId);
+  if (!cfg) return;
+  cfg.modelIds = cfg.modelIds.filter(mid => mid !== modelId);
+  writeData(data);
+}
+
+// 激活配置（仅改数据，不写文件；写文件由 standalone.js 的 set-active 端点触发）
+function setActiveConfig(category, configId) {
+  const data = readData();
+  if (!data[category]) throw new Error(`分类 ${category} 不存在`);
+  if (!data[category].configs.find(c => c.id === configId)) {
+    throw new Error(`配置 ${configId} 不存在`);
+  }
+  data[category].activeConfigId = configId;
+  writeData(data);
+}
+
+// 获取所有配置（含模型详情）
+function getConfigs(category) {
+  const data = readData();
+  if (!data[category]) return [];
+  const cat = data[category];
+  return cat.configs.map(cfg => ({
+    ...cfg,
+    isActive: cfg.id === cat.activeConfigId,
+    models: cfg.modelIds
+      .map(mid => {
+        const model = data.models.find(m => m.id === mid);
+        if (!model) return null;
+        const provider = data.providers.find(p => p.id === model.providerId);
+        return { ...model, provider: provider || null };
+      })
+      .filter(Boolean)
+  }));
+}
+
+// 获取激活的配置
+function getActiveConfig(category) {
+  const data = readData();
+  const cat = data[category];
+  if (!cat || !cat.activeConfigId) return null;
+  const cfg = cat.configs.find(c => c.id === cat.activeConfigId);
+  if (!cfg) return null;
+  return {
+    ...cfg,
+    isActive: true,
+    models: cfg.modelIds
+      .map(mid => {
+        const model = data.models.find(m => m.id === mid);
+        if (!model) return null;
+        const provider = data.providers.find(p => p.id === model.providerId);
+        return { ...model, provider: provider || null };
+      })
+      .filter(Boolean)
+  };
+}
+
+// ====== 路由解析（基于激活配置） ======
+
+// 根据路由键解析 Provider 和模型（仅在激活配置的 modelIds 中查找）
+function resolveRoutingKey(routingKey, category) {
+  const data = readData();
+  const idx = routingKey.indexOf('/');
+  if (idx === -1) return null;
+  const providerName = routingKey.substring(0, idx);
+  const modelName = routingKey.substring(idx + 1);
+  const cat = data[category];
+  if (!cat || !cat.activeConfigId) return null;
+  const activeCfg = cat.configs.find(c => c.id === cat.activeConfigId);
+  if (!activeCfg) return null;
+  // 在激活配置的 modelIds 中查找
+  const matchingProviders = data.providers.filter(p => p.name === providerName);
+  for (const provider of matchingProviders) {
+    const model = data.models.find(m =>
+      m.providerId === provider.id &&
+      m.name === modelName &&
+      activeCfg.modelIds.includes(m.id)
+    );
+    if (model) return { provider, model };
+  }
+  return null;
+}
+
+// 获取激活配置下所有模型的路由键列表
+function getCategoryRoutingKeys(category) {
+  const activeCfg = getActiveConfig(category);
+  if (!activeCfg) return [];
+  return activeCfg.models.map(m => modelRoutingKey(m));
+}
+
+// ====== 兼容旧 API（委托到激活配置） ======
+
+// 返回激活配置下的模型列表（含 isActive 标记，首个模型标记为 "当前"）
+function getCategoryModels(category) {
+  const activeCfg = getActiveConfig(category);
+  if (!activeCfg) return [];
+  return activeCfg.models.map((m, i) => ({ ...m, isActive: i === 0 }));
+}
+
+// 向激活配置添加模型（需要先有激活的配置）
+function addModelToCategory(category, modelId) {
+  const data = readData();
+  if (!data[category]) throw new Error(`分类 ${category} 不存在`);
+  if (!data.models.find(m => m.id === modelId)) throw new Error(`模型 ${modelId} 不存在`);
+  const activeCfg = data[category].configs.find(c => c.id === data[category].activeConfigId);
+  if (!activeCfg) throw new Error(`分类 ${category} 下没有激活的配置，请先创建配置`);
+  if (!activeCfg.modelIds.includes(modelId)) {
+    activeCfg.modelIds.push(modelId);
+  }
+  writeData(data);
+}
+
+// 从激活配置移除模型
+function removeModelFromCategory(category, modelId) {
+  const data = readData();
+  if (!data[category] || !data[category].activeConfigId) return;
+  const activeCfg = data[category].configs.find(c => c.id === data[category].activeConfigId);
+  if (!activeCfg) return;
+  activeCfg.modelIds = activeCfg.modelIds.filter(mid => mid !== modelId);
+  writeData(data);
+}
+
+// 设置激活模型（旧 API，保留但无实际操作；改为设置激活配置才有意义）
+function setActiveModel(category, modelId) {
+  // 旧 API 兼容：不做任何操作，配置级别的激活才有意义
+}
+
+// 获取激活模型（返回激活配置下的第一个模型）
+function getActiveModel(category) {
+  const models = getCategoryModels(category);
+  return models[0] || null;
+}
+
+module.exports = {
+  // Provider
+  getProviders, addProvider, updateProvider, deleteProvider, findProviderByName,
+  // Model
+  getModels, addModel, deleteModel, getModelWithProvider,
+  // Config（新）
+  addConfig, deleteConfig, renameConfig,
+  addModelToConfig, removeModelFromConfig,
+  setActiveConfig, getConfigs, getActiveConfig,
+  // Category（兼容旧 API）
+  getCategoryModels, addModelToCategory, removeModelFromCategory, setActiveModel, getActiveModel,
+  // 路由键
+  modelRoutingKey, resolveRoutingKey, getCategoryRoutingKeys,
+  // 工具
+  buildApiUrl, readData, writeData, DATA_DIR
+};
