@@ -25,6 +25,33 @@ function formatTime(ts) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+// 缓存命中率空心圆环
+function cacheRatio(m) {
+  if (!m.inputTokens || m.inputTokens === 0) return 0;
+  return Math.min(m.cachedInputTokens / m.inputTokens, 1);
+}
+
+function CacheRing({ ratio, size = 40, strokeW = 4 }) {
+  const r = (size - strokeW) / 2;
+  const circ = 2 * Math.PI * r;
+  const offset = circ * (1 - ratio);
+  const color = ratio > 0.5 ? '#9ece6a' : ratio > 0.2 ? '#e0af68' : '#565a6e';
+  const pct = Math.round(ratio * 100);
+  return (
+    <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+      <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#252837" strokeWidth={strokeW} />
+        {ratio > 0 && (
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={strokeW}
+            strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
+            style={{ transition: 'stroke-dashoffset 0.4s' }} />
+        )}
+      </svg>
+      <span style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', fontSize: 10, fontWeight: 600, color }}>{pct}%</span>
+    </div>
+  );
+}
+
 const s = {
   page: { maxWidth: 760 },
   title: { fontSize: 18, fontWeight: 600, marginBottom: 16 },
@@ -75,6 +102,7 @@ const s = {
 export default function UsageTab() {
   const [range, setRange] = useState('today');
   const [models, setModels] = useState([]);
+  const [total, setTotal] = useState(null);
   const [loading, setLoading] = useState(false);
 
   // 详情状态
@@ -87,7 +115,8 @@ export default function UsageTab() {
     try {
       const data = await api.getUsage(range);
       setModels(data.models || []);
-    } catch { setModels([]); }
+      setTotal(data.total || null);
+    } catch { setModels([]); setTotal(null); }
     setLoading(false);
   }, [range]);
 
@@ -196,16 +225,44 @@ export default function UsageTab() {
     <div style={s.page}>
       <div style={s.title}>用量统计</div>
 
-      {/* 时间范围选择器 */}
-      <div style={s.rangeBar}>
-        {RANGES.map(r => (
-          <button
-            key={r.key}
-            style={s.rangeBtn(r.key === range)}
-            onClick={() => setRange(r.key)}
-          >{r.label}</button>
-        ))}
+      {/* 时间范围选择器 + 刷新 */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+        <div style={s.rangeBar}>
+          {RANGES.map(r => (
+            <button
+              key={r.key}
+              style={s.rangeBtn(r.key === range)}
+              onClick={() => setRange(r.key)}
+            >{r.label}</button>
+          ))}
+        </div>
+        <button
+          style={{ padding: '5px 14px', borderRadius: 4, border: '1px solid #2f3346', background: 'transparent', color: '#7dcfff', cursor: 'pointer', fontSize: 12 }}
+          onClick={() => loadModels()}
+        >刷新</button>
       </div>
+
+      {/* 总统计 */}
+      {total && (
+        <div style={{ ...s.summary, marginBottom: 16 }}>
+          <div style={s.summaryItem}>
+            <div style={s.summaryLabel}>总调用次数</div>
+            <div style={s.summaryVal}>{total.callCount}</div>
+          </div>
+          <div style={s.summaryItem}>
+            <div style={s.summaryLabel}>输入 Tokens（含缓存）</div>
+            <div style={s.summaryVal}>{formatTokens(total.inputTokens)}</div>
+          </div>
+          <div style={s.summaryItem}>
+            <div style={s.summaryLabel}>缓存输入 Tokens</div>
+            <div style={s.summaryVal}>{formatTokens(total.cachedInputTokens)}</div>
+          </div>
+          <div style={s.summaryItem}>
+            <div style={s.summaryLabel}>输出 Tokens</div>
+            <div style={s.summaryVal}>{formatTokens(total.outputTokens)}</div>
+          </div>
+        </div>
+      )}
 
       {/* 模型列表 */}
       {loading ? (
@@ -213,18 +270,22 @@ export default function UsageTab() {
       ) : models.length === 0 ? (
         <div style={s.empty}>暂无用量数据</div>
       ) : (
-        models.map(m => (
+        models.map(m => {
+          const ratio = cacheRatio(m);
+          return (
           <div key={m.model} style={s.modelCard} onClick={() => openDetail(m)}>
-            <div>
+            <div style={{ flex: 1 }}>
               <div style={s.modelName}>{m.model.replace('/', ' / ')}</div>
-              <div style={s.modelMeta}>调用 {m.callCount} 次</div>
+              <div style={s.modelMeta}>调用 {m.callCount} 次 &nbsp;·&nbsp; 缓存命中 {Math.round(ratio * 100)}%</div>
             </div>
-            <div>
+            <CacheRing ratio={ratio} />
+            <div style={{ marginLeft: 10 }}>
               <div style={s.modelTokens}>{formatTokens(m.totalTokens)}</div>
               <div style={s.modelCalls}>总 tokens</div>
             </div>
           </div>
-        ))
+          );
+        })
       )}
     </div>
   );

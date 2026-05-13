@@ -2,7 +2,7 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('ccrelay', {
+contextBridge.exposeInMainWorld('clauderelay', {
   // Provider CRUD
   getProviders: () => ipcRenderer.invoke('get-providers'),
   addProvider: (data) => ipcRenderer.invoke('add-provider', data),

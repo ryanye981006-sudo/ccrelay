@@ -1,4 +1,4 @@
-// 数据存储层：读写 ~/.ccrelay-desktop/data.json
+// 数据存储层：读写 ~/.clauderelay-desktop/data.json（目录名保持兼容）
 
 const fs = require('fs');
 const path = require('path');

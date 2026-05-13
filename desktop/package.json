@@ -1,7 +1,7 @@
 {
-  "name": "ccrelay-desktop",
+  "name": "clauderelay-desktop",
   "version": "0.1.0",
-  "description": "CCRelay Desktop — 协议翻译代理桌面客户端",
+  "description": "ClaudeRelay Desktop — Claude Code 和 Codex 的万能代理桌面客户端",
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently \"vite renderer --config vite.config.js\" \"wait-on http://127.0.0.1:5173 && electron .\"",

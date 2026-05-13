@@ -240,7 +240,7 @@ function createServer(config, serverType, serverConfig) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       if (serverType === 'codex') {
         // OpenAI 格式
-        res.end(JSON.stringify({ object: 'list', data: modelData.map(m => ({ id: m.id, object: 'model', created: 1, owned_by: 'ccrelay' })) }));
+        res.end(JSON.stringify({ object: 'list', data: modelData.map(m => ({ id: m.id, object: 'model', created: 1, owned_by: 'clauderelay' })) }));
       } else {
         // Anthropic 格式
         res.end(JSON.stringify({ data: modelData, has_more: false, first_id: modelData[0]?.id || '', last_id: modelData[modelData.length - 1]?.id || '' }));

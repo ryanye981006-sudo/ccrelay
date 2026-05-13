@@ -172,7 +172,7 @@ function createWindow() {
     height: 640,
     minWidth: 700,
     minHeight: 500,
-    title: 'CCRelay Desktop',
+    title: 'ClaudeRelay Desktop',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

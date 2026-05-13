@@ -1,24 +1,24 @@
-# CCRelay Desktop 研发方案
+# ClaudeRelay Desktop 研发方案
 
 ## 一、产品概述
 
-在现有 ccrelay 协议翻译代理之上，用 Electron 构建桌面客户端。用户通过 GUI 管理 API 源和模型，选择模型后自动写入 CC/Codex 配置文件，内嵌代理负责协议翻译。
+在现有 ClaudeRelay 协议翻译代理之上，用 Electron 构建桌面客户端。用户通过 GUI 管理 API 源和模型，选择模型后自动写入 CC/Codex 配置文件，内嵌代理负责协议翻译。
 
 ## 二、技术选型
 
 | 层面 | 选型 | 理由 |
 |---|---|---|
-| 桌面框架 | Electron | 直接复用现有 ccrelay Node.js 代码 |
+| 桌面框架 | Electron | 直接复用现有 ClaudeRelay Node.js 代码 |
 | 前端 | React + TypeScript | 生态成熟、类型安全 |
 | 打包 | electron-builder | Windows/macOS 安装包 |
-| 数据存储 | JSON 文件 (`~/.ccrelay-desktop/data.json`) | 零依赖，和 ccrelay 风格一致 |
-| 代理引擎 | 复用 ccrelay `src/` 全部代码 | 协议翻译逻辑不变 |
+| 数据存储 | JSON 文件 (`~/.ccrelay-desktop/data.json`) | 零依赖，和 ClaudeRelay 风格一致 |
+| 代理引擎 | 复用 ClaudeRelay `src/` 全部代码 | 协议翻译逻辑不变 |
 
 ## 三、产品架构
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                 CCRelay Desktop (Electron)               │
+│                 ClaudeRelay Desktop (Electron)               │
 │                                                          │
 │  ┌──────────────────────┐  ┌──────────────────────────┐ │
 │  │   渲染进程 (React)     │  │    主进程 (Node.js)       │ │
@@ -30,7 +30,7 @@
 │  │  └────────────────┘  │  │  └────────────────────┘  │ │
 │  │  ┌────────────────┐  │  │  ┌────────────────────┐  │ │
 │  │  │ Codex Tab      │  │  │  │ 代理引擎            │  │ │
-│  │  │  模型列表      │  ├──│→│  │ 复用 ccrelay 代码  │  │ │
+│  │  │  模型列表      │  ├──│→│  │ 复用 ClaudeRelay 代码  │  │ │
 │  │  │  激活切换      │  │  │  │ :18888 / :18889    │  │ │
 │  │  └────────────────┘  │  │  │ 协议翻译            │  │ │
 │  │  ┌────────────────┐  │  │  └────────────────────┘  │ │
@@ -103,7 +103,7 @@ Category (CC / Codex) ────────┘
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  CCRelay Desktop                                 ─  □  ×  │
+│  ClaudeRelay Desktop                                 ─  □  ×  │
 ├────────┬─────────────────────────────────────────────────┤
 │        │                                                  │
 │  CC    │  [根据选中 Tab 显示对应页面内容]                    │
@@ -310,7 +310,7 @@ getProxyStatus() → { running: boolean; ccPort: number; codexPort: number }
 ## 八、项目目录结构
 
 ```
-ccrelay-desktop/
+ClaudeRelay-desktop/
 ├── package.json                  # 项目配置 + electron-builder 打包配置
 ├── tsconfig.json
 ├── electron/
@@ -321,7 +321,7 @@ ccrelay-desktop/
 │       ├── model-ipc.ts          # 模型 CRUD IPC 处理
 │       ├── category-ipc.ts       # 分类关联 + 配置写入 IPC 处理
 │       └── proxy-ipc.ts          # 代理引擎启停 IPC 处理
-├── src/                          # 复用现有 ccrelay 代码（不改）
+├── src/                          # 复用现有 ClaudeRelay 代码（不改）
 │   ├── server.js
 │   ├── request.js
 │   ├── response.js
@@ -449,9 +449,9 @@ App
 
 ### Phase 3：代理引擎集成 + 配置文件写入
 
-**目标**：嵌入 ccrelay，实现配置写入，验证端到端
+**目标**：嵌入 ClaudeRelay，实现配置写入，验证端到端
 
-- 实现 `proxy-engine.ts`：封装 ccrelay server 启停，从 data.json 读取当前激活的 Provider
+- 实现 `proxy-engine.ts`：封装 ClaudeRelay server 启停，从 data.json 读取当前激活的 Provider
 - 实现 `config-writer.ts`：写入 CC settings.json / Codex 配置
 - 「应用配置」按钮逻辑：写配置 → 提示重启
 - 端到端验证：选模型 → 写配置 → CC 请求 → 代理翻译 → 后端
@@ -471,7 +471,7 @@ App
 |---|---|---|
 | 切换方式 | 写入配置文件 | 先不做热切换，降低复杂度 |
 | 代理翻译 | 根据 Provider.protocol 自动选择 | 三种协议需要正确路由 |
-| 数据存储 | 单个 data.json | 零依赖、易调试、和 ccrelay 风格一致 |
+| 数据存储 | 单个 data.json | 零依赖、易调试、和 ClaudeRelay 风格一致 |
 | 不引入转换器 | Provider 无 transformer 字段 | 用户不需要，协议类型已足够 |
 | 不做用量统计 | 无 usage_logs 表 | 用户明确不需要 |
-| 协议 | MIT | 和现有 ccrelay 保持一致 |
+| 协议 | MIT | 和现有 ClaudeRelay 保持一致 |

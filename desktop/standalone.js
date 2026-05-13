@@ -1,4 +1,4 @@
-// CCRelay Desktop — 独立服务器模式（免 Electron）
+// ClaudeRelay Desktop — 独立服务器模式（免 Electron）
 // 启动代理引擎 + Web 管理界面
 
 const http = require('http');
@@ -251,7 +251,8 @@ function apiRouter(req, res, url, method, body) {
           totalTokens: 0,
           inputTokens: 0,
           cachedInputTokens: 0,
-          outputTokens: 0
+          outputTokens: 0,
+          lastUsed: 0
         };
       }
       modelMap[r.model].callCount++;
@@ -259,8 +260,19 @@ function apiRouter(req, res, url, method, body) {
       modelMap[r.model].cachedInputTokens += r.cachedInputTokens || 0;
       modelMap[r.model].outputTokens += r.outputTokens;
       modelMap[r.model].totalTokens += r.inputTokens + r.outputTokens;
+      if (r.timestamp > modelMap[r.model].lastUsed) {
+        modelMap[r.model].lastUsed = r.timestamp;
+      }
     }
-    return { data: { models: Object.values(modelMap) } };
+    const models = Object.values(modelMap);
+    models.sort((a, b) => b.lastUsed - a.lastUsed);
+    return { data: { models, total: {
+      callCount: models.reduce((s, m) => s + m.callCount, 0),
+      inputTokens: models.reduce((s, m) => s + m.inputTokens, 0),
+      cachedInputTokens: models.reduce((s, m) => s + m.cachedInputTokens, 0),
+      outputTokens: models.reduce((s, m) => s + m.outputTokens, 0),
+      totalTokens: models.reduce((s, m) => s + m.totalTokens, 0)
+    } } };
   }
 
   // GET /api/usage/:modelKey?range=&page=&pageSize= — 模型详细记录（分页）
@@ -398,17 +410,17 @@ async function main() {
   await new Promise((resolve) => uiServer.listen(UI_PORT, '127.0.0.1', resolve));
   console.log(`[ui] 管理界面 → http://127.0.0.1:${UI_PORT}`);
 
-  console.log('\n=== CCRelay Desktop (独立版) ===');
+  console.log('\n=== ClaudeRelay Desktop (独立版) ===');
   console.log(`CC 代理:    http://127.0.0.1:${CC_PORT}`);
   console.log(`Codex 代理: http://127.0.0.1:${CODEX_PORT}`);
   console.log(`管理界面:  http://127.0.0.1:${UI_PORT}`);
   console.log('按 Ctrl+C 退出\n');
 
   function shutdown() {
-    console.log('\n[ccrelay] 正在关闭...');
+    console.log('\n[clauderelay] 正在关闭...');
     uiServer.close();
     Promise.all([stopServer(codexServer), stopServer(ccServer)]).then(() => {
-      console.log('[ccrelay] 已退出');
+      console.log('[clauderelay] 已退出');
       process.exit(0);
     });
   }

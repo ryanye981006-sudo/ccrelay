@@ -1,4 +1,4 @@
-// CCRelay — Anthropic Messages / OpenAI Responses → Chat Completions 协议翻译代理
+// ClaudeRelay — Anthropic Messages / OpenAI Responses → Chat Completions 协议翻译代理
 
 const fs = require('fs');
 const path = require('path');
@@ -54,16 +54,16 @@ if (servers.length === 0) {
   process.exit(1);
 }
 
-console.log(`[ccrelay] 后端 → ${config.backend.url}`);
+console.log(`[clauderelay] 后端 → ${config.backend.url}`);
 
 // 优雅退出
 function shutdown() {
-  console.log('\n[ccrelay] 正在关闭...');
+  console.log('\n[clauderelay] 正在关闭...');
   let closed = 0;
   for (const s of servers) {
-    s.close(() => { closed++; if (closed === servers.length) { console.log('[ccrelay] 已退出'); process.exit(0); } });
+    s.close(() => { closed++; if (closed === servers.length) { console.log('[clauderelay] 已退出'); process.exit(0); } });
   }
-  setTimeout(() => { console.log('[ccrelay] 强制退出'); process.exit(0); }, 5000);
+  setTimeout(() => { console.log('[clauderelay] 强制退出'); process.exit(0); }, 5000);
 }
 
 process.on('SIGTERM', shutdown);

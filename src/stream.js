@@ -77,6 +77,7 @@ class StreamTransformer {
     this.blockIndex = 0;
     this.currentBlockType = null; // 'thinking' | 'text' | 'tool_use'
     this.outputTokens = 0;
+    this.cachedInputTokens = 0;
     // tool_use 缓冲区: toolCallIndex → { id, name, argsStr }
     this.toolUseBuf = {};
     // toolCallIndex → blockIndex 映射
@@ -108,6 +109,7 @@ class StreamTransformer {
     if (usage) {
       this.inputTokens = usage.prompt_tokens || 0;
       this.outputTokens = usage.completion_tokens || 0;
+      this.cachedInputTokens = usage.prompt_tokens_details?.cached_tokens || usage.prompt_cache_hit_tokens || 0;
     }
 
     const events = [];
@@ -215,7 +217,7 @@ class StreamTransformer {
 
   // 获取最终 token 统计（流结束后调用）
   getStats() {
-    return { inputTokens: this.inputTokens, outputTokens: this.outputTokens };
+    return { inputTokens: this.inputTokens, outputTokens: this.outputTokens, cachedInputTokens: this.cachedInputTokens };
   }
 }
 

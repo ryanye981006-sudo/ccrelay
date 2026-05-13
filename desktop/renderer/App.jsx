@@ -49,7 +49,7 @@ export default function App() {
   return (
     <div style={styles.container}>
       <div style={styles.header}>
-        <span style={styles.headerTitle}>CCRelay Desktop</span>
+        <span style={styles.headerTitle}>ClaudeRelay Desktop</span>
       </div>
       <div style={styles.body}>
         <div style={styles.sidebar}>

@@ -1,4 +1,4 @@
-// CCRelay 单元测试 — 验证协议转换纯函数
+// ClaudeRelay 单元测试 — 验证协议转换纯函数
 
 const assert = require('assert');
 const { anthropicToOpenAI } = require('../src/request');

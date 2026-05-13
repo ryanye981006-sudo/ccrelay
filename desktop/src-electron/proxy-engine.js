@@ -1,4 +1,4 @@
-// 代理引擎：基于 ccrelay 源码，按 model 名前缀路由到不同后端
+// 代理引擎：基于 ClaudeRelay 源码，按 model 名前缀路由到不同后端
 
 const http = require('http');
 const https = require('https');
@@ -168,6 +168,7 @@ function streamFetchBackend(backend, openaiBody, res, createTransformer, routing
           model: modelKey,
           category: currentCategory,
           inputTokens: stats.inputTokens,
+          cachedInputTokens: stats.cachedInputTokens || 0,
           outputTokens: stats.outputTokens,
           incomplete: clientDisconnected
         });
@@ -183,6 +184,7 @@ function streamFetchBackend(backend, openaiBody, res, createTransformer, routing
           model: modelKey,
           category: currentCategory,
           inputTokens: stats.inputTokens,
+          cachedInputTokens: stats.cachedInputTokens || 0,
           outputTokens: stats.outputTokens,
           incomplete: true
         });
@@ -240,7 +242,7 @@ function createCodexServer(port) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         object: 'list',
-        data: routingKeys.map(id => ({ id, object: 'model', created: 1, owned_by: 'ccrelay' })),
+        data: routingKeys.map(id => ({ id, object: 'model', created: 1, owned_by: 'clauderelay' })),
       }));
       return;
     }
@@ -278,7 +280,7 @@ function createCodexServer(port) {
                 model: responsesBody.model,
                 category: 'codex',
                 inputTokens: result.body.usage.prompt_tokens || 0,
-                cachedInputTokens: result.body.usage.prompt_tokens_details?.cached_tokens || 0,
+                cachedInputTokens: result.body.usage.prompt_tokens_details?.cached_tokens || result.body.usage.prompt_cache_hit_tokens || 0,
                 outputTokens: result.body.usage.completion_tokens || 0
               });
             }
@@ -346,7 +348,7 @@ function createCCServer(port) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         object: 'list',
-        data: routingKeys.map(id => ({ id, object: 'model', created: 1, owned_by: 'ccrelay' })),
+        data: routingKeys.map(id => ({ id, object: 'model', created: 1, owned_by: 'clauderelay' })),
       }));
       return;
     }
@@ -392,7 +394,7 @@ function createCCServer(port) {
                 model: anthropicBody.model,
                 category: 'claude',
                 inputTokens: result.body.usage.prompt_tokens || 0,
-                cachedInputTokens: result.body.usage.prompt_tokens_details?.cached_tokens || 0,
+                cachedInputTokens: result.body.usage.prompt_tokens_details?.cached_tokens || result.body.usage.prompt_cache_hit_tokens || 0,
                 outputTokens: result.body.usage.completion_tokens || 0
               });
             }

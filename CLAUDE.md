@@ -1,6 +1,6 @@
-# CCRelay — Anthropic ↔ OpenAI 协议翻译代理
+# ClaudeRelay — Claude Code 和 Codex 的万能代理
 
-极简的本地代理，把 Claude Code 的 Anthropic Messages 协议翻译为 OpenCode GO Plan 的 OpenAI Chat Completions 协议。零第三方依赖，只用 Node.js 原生模块。
+Claude Code 和 Codex 的万能代理。把 Anthropic Messages / Responses API 翻译为 OpenAI Chat Completions，支持多后端前缀路由。零第三方依赖核心，只用 Node.js 原生模块。
 
 ## 技术栈
 - 语言: Node.js（≥16）

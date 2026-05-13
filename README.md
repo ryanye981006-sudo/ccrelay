@@ -1,6 +1,6 @@
-# CCRelay
+# ClaudeRelay
 
-Anthropic ↔ OpenAI 协议翻译代理。零第三方依赖，纯 Node.js 原生模块。支持多后端前缀路由、Web 管理界面、用量统计。
+Claude Code 和 Codex 的万能代理。Anthropic ↔ OpenAI 协议翻译，多后端前缀路由，用量统计。零第三方依赖，纯 Node.js 原生模块。支持多后端前缀路由、Web 管理界面、用量统计。
 
 ## 版本
 
@@ -77,9 +77,11 @@ Claude Code / Codex CLI          Web 管理界面
 
 ### 用量统计（用量 Tab）
 
-- 按时间范围（当天 / 近7天 / 近30天）筛选
-- 模型维度聚合：调用次数 + 总 tokens
-- 模型详情：每条请求的输入/缓存输入/输出 tokens，分页展示
+- 时间范围筛选（当天 / 近7天 / 近30天），默认当天
+- 全局总统计：调用次数、输入/缓存/输出 tokens
+- 模型维度聚合卡片，按最近使用时间由近到远排序
+- 每张模型卡片显示缓存命中率空心圆环（颜色：灰 → 橙 → 绿，按 0%→100% 渐变）
+- 模型详情：每条请求的时间戳、输入/缓存/输出 tokens，分页（100条/页，最多1000条）
 - Token 单位自动切换：K → M → B
 
 ### API 端点
@@ -170,7 +172,7 @@ node index.js
 ## 项目结构
 
 ```
-ccrelay/
+ClaudeRelay/
 ├── index.js                    # CLI 版入口
 ├── config.example.json         # CLI 版配置模板
 ├── src/

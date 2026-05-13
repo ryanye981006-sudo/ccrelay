@@ -21,6 +21,7 @@ class ResponsesStreamTransformer {
     this.finished = false;
     this.inputTokens = 0;
     this.outputTokens = 0;
+    this.cachedInputTokens = 0;
 
     // reasoning 状态
     this.reasoningStarted = false;
@@ -61,6 +62,7 @@ class ResponsesStreamTransformer {
     if (usage) {
       this.inputTokens = usage.prompt_tokens || 0;
       this.outputTokens = usage.completion_tokens || 0;
+      this.cachedInputTokens = usage.prompt_tokens_details?.cached_tokens || usage.prompt_cache_hit_tokens || 0;
     }
 
     // 预处理器：从 delta.content 剥离 <think> 标签，转为 delta.reasoning_content
@@ -347,7 +349,7 @@ class ResponsesStreamTransformer {
 
   // 获取最终 token 统计（流结束后调用）
   getStats() {
-    return { inputTokens: this.inputTokens, outputTokens: this.outputTokens };
+    return { inputTokens: this.inputTokens, outputTokens: this.outputTokens, cachedInputTokens: this.cachedInputTokens };
   }
 }
 
