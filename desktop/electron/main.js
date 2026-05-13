@@ -12,23 +12,32 @@ const {
   modelRoutingKey,
 } = require('../src-electron/data-store');
 const { writeCodexConfig, ensureConfigFile } = require('../src-electron/config-writer');
-const { createCodexServer, stopServer } = require('../src-electron/proxy-engine');
+const { writeCCConfig, ensureCCConfigFile } = require('../src-electron/cc-config-writer');
+const { createCodexServer, createCCServer, stopServer } = require('../src-electron/proxy-engine');
 
 const CODEX_PORT = 18889;
+const CC_PORT = 18888;
 
 let mainWindow = null;
 let codexServer = null;
+let ccServer = null;
 
 // 代理引擎已改为前缀路由模式：无需注册 Provider 解析器
 // 每次请求到来时，engine 根据 model 名前缀自动查找对应的 Provider
 
-// 启动 Codex 代理
-async function startCodexProxy() {
+// 启动代理
+async function startProxies() {
   try {
     codexServer = await createCodexServer(CODEX_PORT);
     console.log(`[main] Codex 代理已启动 :${CODEX_PORT}`);
   } catch (e) {
     console.error(`[main] Codex 代理启动失败: ${e.message}`);
+  }
+  try {
+    ccServer = await createCCServer(CC_PORT);
+    console.log(`[main] CC 代理已启动 :${CC_PORT}`);
+  } catch (e) {
+    console.error(`[main] CC 代理启动失败: ${e.message}`);
   }
 }
 
@@ -50,27 +59,51 @@ function registerIpcHandlers() {
   ipcMain.handle('add-config', (_, category, name) => {
     const cfg = addConfig(category, name);
     if (category === 'codex') ensureConfigFile();
+    else if (category === 'claude') ensureCCConfigFile();
     return cfg;
   });
   ipcMain.handle('delete-config', (_, category, configId) => deleteConfig(category, configId));
   ipcMain.handle('rename-config', (_, category, configId, name) => renameConfig(category, configId, name));
-  ipcMain.handle('add-model-to-config', (_, category, configId, modelId) => {
-    addModelToConfig(category, configId, modelId);
+  ipcMain.handle('add-model-to-config', (_, category, configId, modelId, slotIndex) => {
+    addModelToConfig(category, configId, modelId, slotIndex);
     if (category === 'codex') {
       const activeCfg = getActiveConfig('codex');
       if (activeCfg && activeCfg.id === configId && activeCfg.models.length > 0) {
         writeCodexConfig(modelRoutingKey(activeCfg.models[0]), CODEX_PORT);
       }
+    } else if (category === 'claude') {
+      const activeCfg = getActiveConfig('claude');
+      if (activeCfg && activeCfg.id === configId) {
+        const routingKeys = (activeCfg.modelIds || []).slice(0, 4).map(mid => {
+          if (!mid) return '';
+          const { getModelWithProvider } = require('../src-electron/data-store');
+          const m = getModelWithProvider(mid);
+          return m ? modelRoutingKey(m) : '';
+        });
+        while (routingKeys.length < 4) routingKeys.push('');
+        if (routingKeys.some(k => k)) writeCCConfig(routingKeys, CC_PORT);
+      }
     }
   });
-  ipcMain.handle('remove-model-from-config', (_, category, configId, modelId) => removeModelFromConfig(category, configId, modelId));
+  ipcMain.handle('remove-model-from-config', (_, category, configId, modelId, slotIndex) => removeModelFromConfig(category, configId, modelId, slotIndex));
   ipcMain.handle('set-active-config', (_, category, configId) => {
     setActiveConfig(category, configId);
     if (category === 'codex') {
       const activeCfg = getActiveConfig('codex');
       if (activeCfg && activeCfg.models.length > 0) {
-        const routingKey = modelRoutingKey(activeCfg.models[0]);
-        writeCodexConfig(routingKey, CODEX_PORT);
+        writeCodexConfig(modelRoutingKey(activeCfg.models[0]), CODEX_PORT);
+      }
+    } else if (category === 'claude') {
+      const activeCfg = getActiveConfig('claude');
+      if (activeCfg) {
+        const routingKeys = (activeCfg.modelIds || []).slice(0, 4).map(mid => {
+          if (!mid) return '';
+          const { getModelWithProvider } = require('../src-electron/data-store');
+          const m = getModelWithProvider(mid);
+          return m ? modelRoutingKey(m) : '';
+        });
+        while (routingKeys.length < 4) routingKeys.push('');
+        if (routingKeys.some(k => k)) writeCCConfig(routingKeys, CC_PORT);
       }
     }
   });
@@ -86,8 +119,9 @@ function registerIpcHandlers() {
 
   // 代理状态
   ipcMain.handle('get-proxy-status', () => ({
-    running: codexServer !== null,
+    running: codexServer !== null || ccServer !== null,
     codexPort: CODEX_PORT,
+    ccPort: CC_PORT,
   }));
 
   // 测试连接：发一个最小请求到 Provider
@@ -159,7 +193,7 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   registerIpcHandlers();
-  await startCodexProxy();
+  await startProxies();
   createWindow();
 
   app.on('activate', () => {
@@ -169,5 +203,6 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', async () => {
   if (codexServer) await stopServer(codexServer);
+  if (ccServer) await stopServer(ccServer);
   if (process.platform !== 'darwin') app.quit();
 });

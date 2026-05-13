@@ -11,12 +11,14 @@ const {
   addConfig, deleteConfig, renameConfig,
   addModelToConfig, removeModelFromConfig,
   setActiveConfig, getConfigs, getActiveConfig,
-  buildApiUrl,
+  buildApiUrl, getUsage, getUsageDetail,
 } = require('./src-electron/data-store');
 const { writeCodexConfig, ensureConfigFile } = require('./src-electron/config-writer');
-const { createCodexServer, stopServer } = require('./src-electron/proxy-engine');
+const { writeCCConfig, ensureCCConfigFile } = require('./src-electron/cc-config-writer');
+const { createCodexServer, createCCServer, stopServer } = require('./src-electron/proxy-engine');
 
-const PROXY_PORT = 18889;
+const CODEX_PORT = 18889;
+const CC_PORT = 18888;
 const UI_PORT = 18900;
 const REQUEST_TIMEOUT = 15000; // 15 秒超时
 
@@ -104,6 +106,8 @@ function apiRouter(req, res, url, method, body) {
     const cfg = addConfig(body.category, body.name);
     if (body.category === 'codex') {
       ensureConfigFile();
+    } else if (body.category === 'claude') {
+      ensureCCConfigFile();
     }
     return { data: cfg };
   }
@@ -116,19 +120,32 @@ function apiRouter(req, res, url, method, body) {
     return { data: cfg };
   }
   if (method === 'POST' && pathname === '/api/config/add-model') {
-    addModelToConfig(body.category, body.configId, body.modelId);
-    // Codex：新增/替换模型时，若当前配置已激活则同步写入配置文件
+    const slotIndex = body.slotIndex;
+    addModelToConfig(body.category, body.configId, body.modelId, slotIndex);
+    // Codex / CC：新增/替换模型时，若当前配置已激活则同步写入配置文件
     if (body.category === 'codex') {
       const activeCfg = getActiveConfig('codex');
       if (activeCfg && activeCfg.id === body.configId && activeCfg.models.length > 0) {
         const { modelRoutingKey } = require('./src-electron/data-store');
-        writeCodexConfig(modelRoutingKey(activeCfg.models[0]), PROXY_PORT);
+        writeCodexConfig(modelRoutingKey(activeCfg.models[0]), CODEX_PORT);
+      }
+    } else if (body.category === 'claude') {
+      const activeCfg = getActiveConfig('claude');
+      if (activeCfg && activeCfg.id === body.configId) {
+        const { modelRoutingKey, getModelWithProvider } = require('./src-electron/data-store');
+        const routingKeys = (activeCfg.modelIds || []).slice(0, 4).map(mid => {
+          if (!mid) return '';
+          const m = getModelWithProvider(mid);
+          return m ? modelRoutingKey(m) : '';
+        });
+        while (routingKeys.length < 4) routingKeys.push('');
+        if (routingKeys.some(k => k)) writeCCConfig(routingKeys, CC_PORT);
       }
     }
     return { data: { ok: true } };
   }
   if (method === 'POST' && pathname === '/api/config/remove-model') {
-    removeModelFromConfig(body.category, body.configId, body.modelId);
+    removeModelFromConfig(body.category, body.configId, body.modelId, body.slotIndex);
     return { data: { ok: true } };
   }
   if (method === 'POST' && pathname === '/api/config/set-active') {
@@ -137,8 +154,19 @@ function apiRouter(req, res, url, method, body) {
       const activeCfg = getActiveConfig('codex');
       if (activeCfg && activeCfg.models.length > 0) {
         const { modelRoutingKey } = require('./src-electron/data-store');
-        const routingKey = modelRoutingKey(activeCfg.models[0]);
-        writeCodexConfig(routingKey, PROXY_PORT);
+        writeCodexConfig(modelRoutingKey(activeCfg.models[0]), CODEX_PORT);
+      }
+    } else if (body.category === 'claude') {
+      const activeCfg = getActiveConfig('claude');
+      if (activeCfg) {
+        const { modelRoutingKey, getModelWithProvider } = require('./src-electron/data-store');
+        const routingKeys = (activeCfg.modelIds || []).slice(0, 4).map(mid => {
+          if (!mid) return '';
+          const m = getModelWithProvider(mid);
+          return m ? modelRoutingKey(m) : '';
+        });
+        while (routingKeys.length < 4) routingKeys.push('');
+        if (routingKeys.some(k => k)) writeCCConfig(routingKeys, CC_PORT);
       }
     }
     return { data: { ok: true } };
@@ -204,7 +232,44 @@ function apiRouter(req, res, url, method, body) {
 
   // 代理状态
   if (method === 'GET' && pathname === '/api/proxy-status') {
-    return { data: { running: true, codexPort: PROXY_PORT } };
+    return { data: { running: true, codexPort: CODEX_PORT, ccPort: CC_PORT } };
+  }
+
+  // ====== 用量统计 ======
+
+  // GET /api/usage?range=today|7d|30d — 按模型聚合
+  if (method === 'GET' && pathname === '/api/usage') {
+    const range = url.searchParams.get('range') || 'today';
+    const records = getUsage(range);
+    // 按 model 聚合
+    const modelMap = {};
+    for (const r of records) {
+      if (!modelMap[r.model]) {
+        modelMap[r.model] = {
+          model: r.model,
+          callCount: 0,
+          totalTokens: 0,
+          inputTokens: 0,
+          cachedInputTokens: 0,
+          outputTokens: 0
+        };
+      }
+      modelMap[r.model].callCount++;
+      modelMap[r.model].inputTokens += r.inputTokens;
+      modelMap[r.model].cachedInputTokens += r.cachedInputTokens || 0;
+      modelMap[r.model].outputTokens += r.outputTokens;
+      modelMap[r.model].totalTokens += r.inputTokens + r.outputTokens;
+    }
+    return { data: { models: Object.values(modelMap) } };
+  }
+
+  // GET /api/usage/:modelKey?range=&page=&pageSize= — 模型详细记录（分页）
+  if (method === 'GET' && pathname.startsWith('/api/usage/')) {
+    const modelKey = decodeURIComponent(pathname.replace('/api/usage/', ''));
+    const range = url.searchParams.get('range') || 'today';
+    const page = parseInt(url.searchParams.get('page')) || 1;
+    const pageSize = parseInt(url.searchParams.get('pageSize')) || 100;
+    return { data: getUsageDetail(modelKey, range, page, pageSize) };
   }
 
   // ====== 测试连接 ======
@@ -326,21 +391,23 @@ async function main() {
     process.exit(1);
   }
 
-  const proxyServer = await createCodexServer(PROXY_PORT);
+  const codexServer = await createCodexServer(CODEX_PORT);
+  const ccServer = await createCCServer(CC_PORT);
 
   const uiServer = createUIServer();
   await new Promise((resolve) => uiServer.listen(UI_PORT, '127.0.0.1', resolve));
   console.log(`[ui] 管理界面 → http://127.0.0.1:${UI_PORT}`);
 
   console.log('\n=== CCRelay Desktop (独立版) ===');
-  console.log(`Codex 代理: http://127.0.0.1:${PROXY_PORT}`);
+  console.log(`CC 代理:    http://127.0.0.1:${CC_PORT}`);
+  console.log(`Codex 代理: http://127.0.0.1:${CODEX_PORT}`);
   console.log(`管理界面:  http://127.0.0.1:${UI_PORT}`);
   console.log('按 Ctrl+C 退出\n');
 
   function shutdown() {
     console.log('\n[ccrelay] 正在关闭...');
     uiServer.close();
-    stopServer(proxyServer).then(() => {
+    Promise.all([stopServer(codexServer), stopServer(ccServer)]).then(() => {
       console.log('[ccrelay] 已退出');
       process.exit(0);
     });

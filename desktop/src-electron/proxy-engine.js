@@ -10,7 +10,7 @@ const { responsesToChat } = require('../../src/responses');
 const { chatToResponses } = require('../../src/responses-response');
 const { ResponsesStreamTransformer } = require('../../src/responses-stream');
 const { estimateTokens, countTokens } = require('../../src/server');
-const { resolveRoutingKey, getCategoryRoutingKeys, findProviderByName, getModels, buildApiUrl } = require('./data-store');
+const { resolveRoutingKey, getCategoryRoutingKeys, findProviderByName, getModels, buildApiUrl, logUsage } = require('./data-store');
 
 // 当前代理面向的分类（codex / claude）
 let currentCategory = 'codex';
@@ -89,7 +89,7 @@ function fetchBackend(backend, openaiBody) {
   });
 }
 
-function streamFetchBackend(backend, openaiBody, res, createTransformer) {
+function streamFetchBackend(backend, openaiBody, res, createTransformer, routingKey) {
   const endpointPath = backend.protocol === 'anthropic' ? '/v1/messages' : '/v1/chat/completions';
   const chatUrl = buildApiUrl(backend.apiBaseUrl, endpointPath);
   const url = new URL(chatUrl);
@@ -109,7 +109,14 @@ function streamFetchBackend(backend, openaiBody, res, createTransformer) {
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
 
   const transformer = createTransformer();
+  const modelKey = routingKey || backend.modelName;
   let buffer = '';
+  let clientDisconnected = false;
+
+  // 监听客户端断开
+  res.on('close', () => {
+    clientDisconnected = true;
+  });
 
   const proxyReq = transport.request(options, (proxyRes) => {
     console.log(`[proxy] ← STREAM ${proxyRes.statusCode}`);
@@ -154,10 +161,34 @@ function streamFetchBackend(backend, openaiBody, res, createTransformer) {
           for (const evt of events) res.write(evt);
         } catch { /* ignore */ }
       }
+      // 记录用量（流式正常完成）
+      const stats = transformer.getStats();
+      if (stats && (stats.inputTokens > 0 || stats.outputTokens > 0)) {
+        logUsage({
+          model: modelKey,
+          category: currentCategory,
+          inputTokens: stats.inputTokens,
+          outputTokens: stats.outputTokens,
+          incomplete: clientDisconnected
+        });
+      }
       res.end();
     });
 
-    proxyRes.on('error', () => { res.end(); });
+    proxyRes.on('error', () => {
+      // 后端连接错误：尝试记录已累积的 token
+      const stats = transformer.getStats();
+      if (stats && (stats.inputTokens > 0 || stats.outputTokens > 0)) {
+        logUsage({
+          model: modelKey,
+          category: currentCategory,
+          inputTokens: stats.inputTokens,
+          outputTokens: stats.outputTokens,
+          incomplete: true
+        });
+      }
+      res.end();
+    });
   });
 
   proxyReq.on('error', (err) => {
@@ -238,10 +269,19 @@ function createCodexServer(port) {
         }
 
         if (responsesBody.stream || openaiBody.stream) {
-          await streamFetchBackend(backend, openaiBody, res, () => new ResponsesStreamTransformer(openaiBody.model));
+          await streamFetchBackend(backend, openaiBody, res, () => new ResponsesStreamTransformer(openaiBody.model), responsesBody.model);
         } else {
           const result = await fetchBackend(backend, openaiBody);
           if (result.status === 200) {
+            if (result.body && result.body.usage) {
+              logUsage({
+                model: responsesBody.model,
+                category: 'codex',
+                inputTokens: result.body.usage.prompt_tokens || 0,
+                cachedInputTokens: result.body.usage.prompt_tokens_details?.cached_tokens || 0,
+                outputTokens: result.body.usage.completion_tokens || 0
+              });
+            }
             const responsesResponse = chatToResponses(result.body);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(responsesResponse));
@@ -272,10 +312,124 @@ function createCodexServer(port) {
   });
 }
 
+// ====== CC 代理服务（Anthropic Messages → Chat Completions） ======
+
+function createCCServer(port) {
+  setCategory('claude');
+  const server = http.createServer(async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Api-Key');
+
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+    console.log(`[claude] ${req.method} ${req.url}`);
+    const reqPath = req.url.split('?')[0];
+
+    // 健康检查
+    if (req.method === 'GET' && reqPath === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', type: 'claude' }));
+      return;
+    }
+
+    // 根路径探测
+    if ((req.method === 'GET' || req.method === 'HEAD') && reqPath === '/') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok' }));
+      return;
+    }
+
+    // 模型列表
+    if (req.method === 'GET' && (reqPath === '/v1/models' || reqPath === '/models')) {
+      const routingKeys = getCategoryRoutingKeys('claude');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        object: 'list',
+        data: routingKeys.map(id => ({ id, object: 'model', created: 1, owned_by: 'ccrelay' })),
+      }));
+      return;
+    }
+
+    // Token 计数
+    if (req.method === 'POST' && reqPath === '/v1/messages/count_tokens') {
+      try {
+        const body = await readBody(req);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ input_tokens: countTokens(body) }));
+      } catch (e) {
+        const err = errorResponse(e.message === 'invalid_json' ? 'invalid_request_error' : 'api_error', e.message, e.message === 'invalid_json' ? 400 : 500);
+        res.writeHead(err.statusCode, err.headers); res.end(err.body);
+      }
+      return;
+    }
+
+    // Anthropic Messages → Chat Completions
+    if (req.method === 'POST' && reqPath === '/v1/messages') {
+      try {
+        const anthropicBody = await readBody(req);
+
+        // 按 model 名前缀路由
+        const backend = resolveBackend(anthropicBody.model);
+        if (!backend) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: `未知模型: ${anthropicBody.model}，可用模型见 /v1/models` } }));
+          return;
+        }
+
+        console.log(`[claude] ← Anthropic routing=${anthropicBody.model} → ${backend.apiBaseUrl} model=${backend.modelName} stream=${anthropicBody.stream}`);
+
+        const openaiBody = anthropicToOpenAI(anthropicBody);
+
+        if (anthropicBody.stream) {
+          const inputTokens = countTokens(anthropicBody);
+          await streamFetchBackend(backend, openaiBody, res, () => new StreamTransformer(openaiBody.model, inputTokens), anthropicBody.model);
+        } else {
+          const result = await fetchBackend(backend, openaiBody);
+          if (result.status === 200) {
+            if (result.body && result.body.usage) {
+              logUsage({
+                model: anthropicBody.model,
+                category: 'claude',
+                inputTokens: result.body.usage.prompt_tokens || 0,
+                cachedInputTokens: result.body.usage.prompt_tokens_details?.cached_tokens || 0,
+                outputTokens: result.body.usage.completion_tokens || 0
+              });
+            }
+            const anthropicResponse = openaiToAnthropic(result.body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(anthropicResponse));
+          } else {
+            const errMsg = typeof result.body === 'object' && result.body.error ? result.body.error.message : `后端返回 ${result.status}`;
+            const err = errorResponse('api_error', errMsg, 502);
+            res.writeHead(err.statusCode, err.headers); res.end(err.body);
+          }
+        }
+      } catch (e) {
+        const err = errorResponse(e.message === 'invalid_json' ? 'invalid_request_error' : 'api_error', e.message, e.message === 'invalid_json' ? 400 : 500);
+        res.writeHead(err.statusCode, err.headers); res.end(err.body);
+      }
+      return;
+    }
+
+    // 404
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ type: 'error', error: { type: 'not_found', message: `未知路径: ${reqPath}` } }));
+  });
+
+  return new Promise((resolve, reject) => {
+    server.listen(port, '127.0.0.1', () => {
+      console.log(`[claude] 代理已启动 → http://127.0.0.1:${port}`);
+      resolve(server);
+    });
+    server.on('error', reject);
+  });
+}
+
 function stopServer(server) {
   return new Promise((resolve) => {
     server.close(() => resolve());
   });
 }
 
-module.exports = { createCodexServer, stopServer };
+module.exports = { createCodexServer, createCCServer, stopServer };

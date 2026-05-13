@@ -34,9 +34,14 @@ export const getConfigs = (category) => request('GET', `/config/${category}`);
 export const addConfig = (category, name) => request('POST', '/config/add', { category, name });
 export const deleteConfig = (category, configId) => request('POST', '/config/delete', { category, configId });
 export const renameConfig = (category, configId, name) => request('POST', '/config/rename', { category, configId, name });
-export const addModelToConfig = (category, configId, modelId) => request('POST', '/config/add-model', { category, configId, modelId });
-export const removeModelFromConfig = (category, configId, modelId) => request('POST', '/config/remove-model', { category, configId, modelId });
+export const addModelToConfig = (category, configId, modelId, slotIndex) => request('POST', '/config/add-model', { category, configId, modelId, slotIndex });
+export const removeModelFromConfig = (category, configId, modelId, slotIndex) => request('POST', '/config/remove-model', { category, configId, modelId, slotIndex });
 export const setActiveConfig = (category, configId) => request('POST', '/config/set-active', { category, configId });
 
 // 代理状态
 export const getProxyStatus = () => request('GET', '/proxy-status');
+
+// 用量统计
+export const getUsage = (range) => request('GET', `/usage?range=${range}`);
+export const getUsageDetail = (modelKey, range, page, pageSize) =>
+  request('GET', `/usage/${encodeURIComponent(modelKey)}?range=${range}&page=${page}&pageSize=${pageSize}`);

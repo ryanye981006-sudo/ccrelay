@@ -6,6 +6,7 @@ const os = require('os');
 
 const DATA_DIR = path.join(os.homedir(), '.ccrelay-desktop');
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
+const USAGE_FILE = path.join(DATA_DIR, 'usage.json');
 
 // 默认数据结构 — 配置化管理
 const DEFAULT_DATA = {
@@ -222,16 +223,29 @@ function renameConfig(category, configId, name) {
   return cfg;
 }
 
-// 向配置中添加模型（codex 分类限制单模型：替换而非追加）
-function addModelToConfig(category, configId, modelId) {
+// 向配置中添加模型
+// codex: 单模型，直接替换
+// claude: slotIndex 指定槽位（0=主模型, 1=Haiku, 2=Sonnet, 3=Opus），默认追加
+function addModelToConfig(category, configId, modelId, slotIndex) {
   const data = readData();
   if (!data[category]) throw new Error(`分类 ${category} 不存在`);
   const cfg = data[category].configs.find(c => c.id === configId);
   if (!cfg) throw new Error(`配置 ${configId} 不存在`);
   if (!data.models.find(m => m.id === modelId)) throw new Error(`模型 ${modelId} 不存在`);
   if (category === 'codex') {
-    // Codex 只允许一个模型：直接替换
     cfg.modelIds = [modelId];
+  } else if (category === 'claude') {
+    const idx = typeof slotIndex === 'number' && slotIndex >= 0 && slotIndex < 4 ? slotIndex : null;
+    if (idx !== null) {
+      // 确保数组足够长
+      while (cfg.modelIds.length <= idx) cfg.modelIds.push('');
+      cfg.modelIds[idx] = modelId;
+    } else {
+      if (cfg.modelIds.length >= 4) throw new Error('CC 配置最多 4 个模型');
+      if (!cfg.modelIds.includes(modelId)) {
+        cfg.modelIds.push(modelId);
+      }
+    }
   } else {
     if (!cfg.modelIds.includes(modelId)) {
       cfg.modelIds.push(modelId);
@@ -241,12 +255,17 @@ function addModelToConfig(category, configId, modelId) {
 }
 
 // 从配置中移除模型
-function removeModelFromConfig(category, configId, modelId) {
+// claude: slotIndex 指定清空哪个槽位
+function removeModelFromConfig(category, configId, modelId, slotIndex) {
   const data = readData();
   if (!data[category]) return;
   const cfg = data[category].configs.find(c => c.id === configId);
   if (!cfg) return;
-  cfg.modelIds = cfg.modelIds.filter(mid => mid !== modelId);
+  if (category === 'claude' && typeof slotIndex === 'number' && slotIndex >= 0 && slotIndex < cfg.modelIds.length) {
+    cfg.modelIds[slotIndex] = '';
+  } else {
+    cfg.modelIds = cfg.modelIds.filter(mid => mid !== modelId);
+  }
   writeData(data);
 }
 
@@ -377,6 +396,75 @@ function getActiveModel(category) {
   return models[0] || null;
 }
 
+// ====== 用量统计 ======
+
+function ensureUsageFile() {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (!fs.existsSync(USAGE_FILE)) fs.writeFileSync(USAGE_FILE, '[]', 'utf-8');
+}
+
+function logUsage(record) {
+  ensureUsageFile();
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf-8'));
+  } catch {
+    data = [];
+  }
+  data.push({
+    timestamp: record.timestamp || Date.now(),
+    model: record.model,
+    category: record.category,
+    inputTokens: record.inputTokens || 0,
+    cachedInputTokens: record.cachedInputTokens || 0,
+    outputTokens: record.outputTokens || 0,
+    incomplete: !!record.incomplete
+  });
+  // 保留最近 90 天
+  const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+  const filtered = data.filter(r => r.timestamp >= cutoff);
+  fs.writeFileSync(USAGE_FILE, JSON.stringify(filtered), 'utf-8');
+}
+
+function getUsage(range) {
+  ensureUsageFile();
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf-8'));
+  } catch {
+    data = [];
+  }
+  const now = Date.now();
+  const rangeMs = {
+    today: 24 * 60 * 60 * 1000,
+    '7d': 7 * 24 * 60 * 60 * 1000,
+    '30d': 30 * 24 * 60 * 60 * 1000
+  }[range] || (24 * 60 * 60 * 1000);
+  const cutoff = now - rangeMs;
+  return data.filter(r => r.timestamp >= cutoff);
+}
+
+// 获取某模型的详细记录（分页），最多 1000 条，按时间由新到旧
+function getUsageDetail(model, range, page, pageSize) {
+  const records = getUsage(range).filter(r => r.model === model);
+  records.sort((a, b) => b.timestamp - a.timestamp);
+  const total = records.length;
+  const maxRecords = 1000;
+  const clampedTotal = Math.min(total, maxRecords);
+  const ps = Math.min(pageSize || 100, 100);
+  const maxPage = Math.ceil(clampedTotal / ps) || 1;
+  const p = Math.min(Math.max(page || 1, 1), maxPage);
+  const offset = (p - 1) * ps;
+  return {
+    model,
+    records: records.slice(offset, offset + ps),
+    total: clampedTotal,
+    page: p,
+    pageSize: ps,
+    maxPage
+  };
+}
+
 module.exports = {
   // Provider
   getProviders, addProvider, updateProvider, deleteProvider, findProviderByName,
@@ -390,6 +478,8 @@ module.exports = {
   getCategoryModels, addModelToCategory, removeModelFromCategory, setActiveModel, getActiveModel,
   // 路由键
   modelRoutingKey, resolveRoutingKey, getCategoryRoutingKeys,
+  // 用量统计
+  logUsage, getUsage, getUsageDetail,
   // 工具
   buildApiUrl, readData, writeData, DATA_DIR
 };

@@ -212,6 +212,11 @@ class StreamTransformer {
 
     return events;
   }
+
+  // 获取最终 token 统计（流结束后调用）
+  getStats() {
+    return { inputTokens: this.inputTokens, outputTokens: this.outputTokens };
+  }
 }
 
 module.exports = { StreamTransformer };

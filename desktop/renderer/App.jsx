@@ -1,11 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { getProxyStatus } from './api';
+import CCTab from './pages/CCTab';
 import CodexTab from './pages/CodexTab';
 import ProviderTab from './pages/ProviderTab';
+import UsageTab from './pages/UsageTab';
 
 const TABS = [
+  { key: 'cc', label: 'CC' },
   { key: 'codex', label: 'Codex' },
   { key: 'provider', label: 'API 源' },
+  { key: 'usage', label: '用量' },
 ];
 
 // 模型显示名：API名称/模型名称
@@ -17,8 +21,8 @@ function modelDisplayName(model) {
 export { modelDisplayName };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('codex');
-  const [proxyStatus, setProxyStatus] = useState({ running: false, codexPort: 18889 });
+  const [activeTab, setActiveTab] = useState('cc');
+  const [proxyStatus, setProxyStatus] = useState({ running: false, codexPort: 18889, ccPort: 18888 });
 
   useEffect(() => {
     getProxyStatus().then(setProxyStatus);
@@ -56,12 +60,15 @@ export default function App() {
           ))}
         </div>
         <div style={styles.content}>
+          {activeTab === 'cc' && <CCTab />}
           {activeTab === 'codex' && <CodexTab />}
           {activeTab === 'provider' && <ProviderTab />}
+          {activeTab === 'usage' && <UsageTab />}
         </div>
       </div>
       <div style={styles.statusBar}>
         <span><span style={styles.dot(proxyStatus.running)}></span>代理 {proxyStatus.running ? '运行中' : '已停止'}</span>
+        <span>CC: 127.0.0.1:{proxyStatus.ccPort}</span>
         <span>Codex: 127.0.0.1:{proxyStatus.codexPort}</span>
       </div>
     </div>
