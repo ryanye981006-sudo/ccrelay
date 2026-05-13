@@ -2,10 +2,12 @@
   "name": "clauderelay-desktop",
   "version": "0.1.0",
   "description": "ClaudeRelay Desktop — Claude Code 和 Codex 的万能代理桌面客户端",
+  "author": "ClaudeRelay",
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently \"vite renderer --config vite.config.js\" \"wait-on http://127.0.0.1:5173 && electron .\"",
     "build": "vite build renderer --config vite.config.js",
+    "pack": "npm run build && electron-builder",
     "start": "electron ."
   },
   "dependencies": {
@@ -16,6 +18,7 @@
     "@vitejs/plugin-react": "^4.2.0",
     "concurrently": "^8.2.0",
     "electron": "^25.9.8",
+    "electron-builder": "^26.8.1",
     "vite": "^5.0.0",
     "wait-on": "^7.2.0"
   }

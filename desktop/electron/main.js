@@ -1,6 +1,6 @@
 // Electron 主进程入口
 
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const http = require('http');
 const {
@@ -14,18 +14,36 @@ const {
 const { writeCodexConfig, ensureConfigFile } = require('../src-electron/config-writer');
 const { writeCCConfig, ensureCCConfigFile } = require('../src-electron/cc-config-writer');
 const { createCodexServer, createCCServer, stopServer } = require('../src-electron/proxy-engine');
+const { createUIServer } = require('../src-electron/ui-server');
 
 const CODEX_PORT = 18889;
 const CC_PORT = 18888;
+const UI_PORT = 18900;
+
+// 单实例锁
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+  return;
+}
 
 let mainWindow = null;
 let codexServer = null;
 let ccServer = null;
+let uiServer = null;
+let tray = null;
+let isQuitting = false;
 
-// 代理引擎已改为前缀路由模式：无需注册 Provider 解析器
-// 每次请求到来时，engine 根据 model 名前缀自动查找对应的 Provider
+app.on('second-instance', () => {
+  // 用户尝试启动第二个实例 → 显示已有窗口
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  }
+});
 
-// 启动代理
+// 启动代理和 UI 服务
 async function startProxies() {
   try {
     codexServer = await createCodexServer(CODEX_PORT);
@@ -38,6 +56,13 @@ async function startProxies() {
     console.log(`[main] CC 代理已启动 :${CC_PORT}`);
   } catch (e) {
     console.error(`[main] CC 代理启动失败: ${e.message}`);
+  }
+  try {
+    uiServer = createUIServer(UI_PORT, CODEX_PORT, CC_PORT);
+    await new Promise((resolve) => uiServer.listen(UI_PORT, '127.0.0.1', resolve));
+    console.log(`[main] UI 服务已启动 :${UI_PORT}`);
+  } catch (e) {
+    console.error(`[main] UI 服务启动失败: ${e.message}`);
   }
 }
 
@@ -151,7 +176,6 @@ function registerIpcHandlers() {
         res.on('data', chunk => { data += chunk; });
         res.on('end', () => {
           if (res.statusCode === 200 || res.statusCode === 401 || res.statusCode === 403) {
-            // 200 成功, 401/403 说明能连通但 key 可能不对
             resolve({ ok: true, status: res.statusCode });
           } else {
             resolve({ ok: false, error: `后端返回 ${res.statusCode}: ${data.substring(0, 200)}` });
@@ -180,29 +204,159 @@ function createWindow() {
     },
   });
 
-  // 开发模式加载 Vite，生产模式加载打包后的文件
+  const distIndex = path.join(__dirname, '..', 'dist-renderer', 'index.html');
   const isDev = process.argv.includes('--dev') || process.env.NODE_ENV === 'development';
-  if (isDev || !app.isPackaged) {
+  if (isDev) {
     mainWindow.loadURL('http://127.0.0.1:5173');
   } else {
-    mainWindow.loadFile(path.join(__dirname, '..', 'dist-renderer', 'index.html'));
+    mainWindow.loadFile(distIndex);
   }
 
+  // 关闭窗口 → 最小化到托盘
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
+  });
+
   mainWindow.on('closed', () => { mainWindow = null; });
+}
+
+// 创建系统托盘
+function createTray() {
+  const size = 16;
+  const rawBuffer = Buffer.alloc(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const idx = (y * size + x) * 4;
+      const cx = 8, cy = 8;
+      const d = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+      if (d <= 6.5) {
+        rawBuffer[idx] = 60;
+        rawBuffer[idx + 1] = 160;
+        rawBuffer[idx + 2] = 210;
+        rawBuffer[idx + 3] = 255;
+      }
+    }
+  }
+  const pngBuffer = encodePNG(rawBuffer, size, size);
+  const trayIcon = nativeImage.createFromBuffer(pngBuffer);
+
+  tray = new Tray(trayIcon);
+  tray.setToolTip('ClaudeRelay Desktop');
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: '显示主窗口',
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      },
+    },
+    { type: 'separator' },
+    {
+      label: '退出',
+      click: () => {
+        isQuitting = true;
+        if (mainWindow) mainWindow.close();
+        cleanupAndQuit();
+      },
+    },
+  ]);
+
+  tray.setContextMenu(contextMenu);
+  tray.on('double-click', () => {
+    if (mainWindow) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
+
+// 最小 PNG 编码器（不依赖第三方库）
+function encodePNG(rgba, width, height) {
+  const zlib = require('zlib');
+
+  const rawData = Buffer.alloc(height * (1 + width * 4));
+  for (let y = 0; y < height; y++) {
+    rawData[y * (1 + width * 4)] = 0;
+    rgba.copy(rawData, y * (1 + width * 4) + 1, y * width * 4, (y + 1) * width * 4);
+  }
+
+  const deflated = zlib.deflateSync(rawData);
+
+  function crc32(buf) {
+    let c;
+    const table = [];
+    for (let n = 0; n < 256; n++) {
+      c = n;
+      for (let k = 0; k < 8; k++) {
+        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      table[n] = c;
+    }
+    c = 0xFFFFFFFF;
+    for (let i = 0; i < buf.length; i++) {
+      c = table[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+    }
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  function chunk(type, data) {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length, 0);
+    const typeB = Buffer.from(type, 'ascii');
+    const crcBuf = Buffer.alloc(4);
+    crcBuf.writeUInt32BE(crc32(Buffer.concat([typeB, data])), 0);
+    return Buffer.concat([len, typeB, data, crcBuf]);
+  }
+
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+
+  return Buffer.concat([
+    signature,
+    chunk('IHDR', ihdr),
+    chunk('IDAT', deflated),
+    chunk('IEND', Buffer.alloc(0))
+  ]);
+}
+
+// 清理服务并退出
+async function cleanupAndQuit() {
+  if (uiServer) uiServer.close();
+  if (codexServer) await stopServer(codexServer);
+  if (ccServer) await stopServer(ccServer);
+  app.quit();
 }
 
 app.whenReady().then(async () => {
   registerIpcHandlers();
   await startProxies();
   createWindow();
+  createTray();
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (mainWindow) {
+      mainWindow.show();
+      mainWindow.focus();
+    } else {
+      createWindow();
+    }
   });
 });
 
-app.on('window-all-closed', async () => {
-  if (codexServer) await stopServer(codexServer);
-  if (ccServer) await stopServer(ccServer);
-  if (process.platform !== 'darwin') app.quit();
+app.on('window-all-closed', () => {
+  // 不退出，保持托盘运行
 });

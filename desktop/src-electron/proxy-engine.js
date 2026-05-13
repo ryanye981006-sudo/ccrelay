@@ -1,23 +1,25 @@
 // 代理引擎：基于 ClaudeRelay 源码，按 model 名前缀路由到不同后端
 
+const path = require('path');
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
-const { anthropicToOpenAI } = require('../../src/request');
-const { openaiToAnthropic } = require('../../src/response');
-const { StreamTransformer } = require('../../src/stream');
-const { responsesToChat } = require('../../src/responses');
-const { chatToResponses } = require('../../src/responses-response');
-const { ResponsesStreamTransformer } = require('../../src/responses-stream');
-const { estimateTokens, countTokens } = require('../../src/server');
-const { resolveRoutingKey, getCategoryRoutingKeys, findProviderByName, getModels, buildApiUrl, logUsage } = require('./data-store');
 
-// 当前代理面向的分类（codex / claude）
-let currentCategory = 'codex';
-
-function setCategory(cat) {
-  currentCategory = cat;
+// 打包兼容：优先使用 src-shared（打包后），回退到项目根 src（开发模式）
+function resolveSrc(moduleName) {
+  const packagedPath = path.join(__dirname, '..', 'src-shared', moduleName);
+  try { return require.resolve(packagedPath); } catch {}
+  return require.resolve(path.join(__dirname, '..', '..', 'src', moduleName));
 }
+
+const { anthropicToOpenAI } = require(resolveSrc('request'));
+const { openaiToAnthropic } = require(resolveSrc('response'));
+const { StreamTransformer } = require(resolveSrc('stream'));
+const { responsesToChat } = require(resolveSrc('responses'));
+const { chatToResponses } = require(resolveSrc('responses-response'));
+const { ResponsesStreamTransformer } = require(resolveSrc('responses-stream'));
+const { estimateTokens, countTokens } = require(resolveSrc('server'));
+const { resolveRoutingKey, getCategoryRoutingKeys, findProviderByName, getModels, buildApiUrl, logUsage } = require('./data-store');
 
 // ====== 工具函数 ======
 
@@ -41,9 +43,9 @@ function readBody(req) {
 }
 
 // 解析请求中的 model 名：providerName/modelName → { provider, model }
-function resolveBackend(modelRoutingKey) {
+function resolveBackend(modelRoutingKey, category) {
   if (!modelRoutingKey) return null;
-  const resolved = resolveRoutingKey(modelRoutingKey, currentCategory);
+  const resolved = resolveRoutingKey(modelRoutingKey, category);
   if (!resolved) return null;
   return {
     apiBaseUrl: resolved.provider.apiBaseUrl,
@@ -89,7 +91,7 @@ function fetchBackend(backend, openaiBody) {
   });
 }
 
-function streamFetchBackend(backend, openaiBody, res, createTransformer, routingKey) {
+function streamFetchBackend(backend, openaiBody, res, createTransformer, routingKey, category) {
   const endpointPath = backend.protocol === 'anthropic' ? '/v1/messages' : '/v1/chat/completions';
   const chatUrl = buildApiUrl(backend.apiBaseUrl, endpointPath);
   const url = new URL(chatUrl);
@@ -166,7 +168,7 @@ function streamFetchBackend(backend, openaiBody, res, createTransformer, routing
       if (stats && (stats.inputTokens > 0 || stats.outputTokens > 0)) {
         logUsage({
           model: modelKey,
-          category: currentCategory,
+          category: category,
           inputTokens: stats.inputTokens,
           cachedInputTokens: stats.cachedInputTokens || 0,
           outputTokens: stats.outputTokens,
@@ -182,7 +184,7 @@ function streamFetchBackend(backend, openaiBody, res, createTransformer, routing
       if (stats && (stats.inputTokens > 0 || stats.outputTokens > 0)) {
         logUsage({
           model: modelKey,
-          category: currentCategory,
+          category: category,
           inputTokens: stats.inputTokens,
           cachedInputTokens: stats.cachedInputTokens || 0,
           outputTokens: stats.outputTokens,
@@ -211,7 +213,7 @@ function streamFetchBackend(backend, openaiBody, res, createTransformer, routing
 // ====== 创建代理服务 ======
 
 function createCodexServer(port) {
-  setCategory('codex');
+  const category = 'codex';
   const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -253,7 +255,7 @@ function createCodexServer(port) {
         const responsesBody = await readBody(req);
 
         // 按 model 名前缀路由到对应后端
-        const backend = resolveBackend(responsesBody.model);
+        const backend = resolveBackend(responsesBody.model, category);
         if (!backend) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: `未知模型: ${responsesBody.model}，可用模型见 /v1/models` } }));
@@ -271,7 +273,7 @@ function createCodexServer(port) {
         }
 
         if (responsesBody.stream || openaiBody.stream) {
-          await streamFetchBackend(backend, openaiBody, res, () => new ResponsesStreamTransformer(openaiBody.model), responsesBody.model);
+          await streamFetchBackend(backend, openaiBody, res, () => new ResponsesStreamTransformer(openaiBody.model), responsesBody.model, category);
         } else {
           const result = await fetchBackend(backend, openaiBody);
           if (result.status === 200) {
@@ -317,7 +319,7 @@ function createCodexServer(port) {
 // ====== CC 代理服务（Anthropic Messages → Chat Completions） ======
 
 function createCCServer(port) {
-  setCategory('claude');
+  const category = 'claude';
   const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -372,7 +374,7 @@ function createCCServer(port) {
         const anthropicBody = await readBody(req);
 
         // 按 model 名前缀路由
-        const backend = resolveBackend(anthropicBody.model);
+        const backend = resolveBackend(anthropicBody.model, category);
         if (!backend) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: `未知模型: ${anthropicBody.model}，可用模型见 /v1/models` } }));
@@ -385,7 +387,7 @@ function createCCServer(port) {
 
         if (anthropicBody.stream) {
           const inputTokens = countTokens(anthropicBody);
-          await streamFetchBackend(backend, openaiBody, res, () => new StreamTransformer(openaiBody.model, inputTokens), anthropicBody.model);
+          await streamFetchBackend(backend, openaiBody, res, () => new StreamTransformer(openaiBody.model, inputTokens), anthropicBody.model, category);
         } else {
           const result = await fetchBackend(backend, openaiBody);
           if (result.status === 200) {

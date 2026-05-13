@@ -1,3 +1,5 @@
 config.json
 node_modules/
 dist-renderer/
+desktop/src-shared/
+desktop/release/

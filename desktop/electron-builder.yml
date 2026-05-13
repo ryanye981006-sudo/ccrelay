@@ -1,0 +1,19 @@
+appId: com.clauderelay.desktop
+productName: ClaudeRelay
+npmRebuild: false
+asar: false
+directories:
+  output: release
+  buildResources: build
+files:
+  - electron/**/*
+  - src-electron/**/*
+  - src-shared/**/*
+  - dist-renderer/**/*
+  - package.json
+win:
+  target:
+    - target: zip
+      arch: [x64]
+  forceCodeSigning: false
+  signAndEditExecutable: false
