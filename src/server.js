@@ -131,7 +131,7 @@ function streamFetchOpenAI(config, openaiBody, res, createTransformer) {
     hostname: url.hostname, port: url.port || (isHttps ? 443 : 80),
     path: url.pathname + url.search, method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'Authorization': `Bearer ${config.backend.apiKey}`, 'Accept': 'text/event-stream' },
-    timeout: config.timeout || 120000,
+    timeout: 0,  // 流式请求不设超时，由心跳保活
     ...tlsOpts,
   };
   console.log(`[backend] → STREAM ${url.origin}${options.path} model=${openaiBody.model} messages=${openaiBody.messages?.length || 0}`);
@@ -140,16 +140,52 @@ function streamFetchOpenAI(config, openaiBody, res, createTransformer) {
 
   const transformer = createTransformer();
   let buffer = '';
+  let streamEnded = false;
+
+  // SSE 心跳：每 15 秒发送注释行，防止中间代理/负载均衡因空闲超时断开连接
+  const heartbeat = setInterval(() => {
+    if (!streamEnded) {
+      try { res.write(': heartbeat\n\n'); } catch { /* 客户端已断开 */ }
+    }
+  }, 15000);
+
+  // 安全结束流：确保无论如何都触发 transformer 完成事件
+  const endStream = (incomplete) => {
+    if (streamEnded) return;
+    streamEnded = true;
+    clearInterval(heartbeat);
+    // 如果 transformer 未完成（后端没发 [DONE] 就关闭了连接），强制触发完成
+    if (!transformer.finished) {
+      try {
+        const events = transformer.processChunk({ choices: [{ delta: {}, finish_reason: incomplete ? 'error' : 'stop' }] });
+        for (const evt of events) res.write(evt);
+      } catch { /* 忽略 */ }
+    }
+    try { res.end(); } catch { /* 客户端可能已断开 */ }
+  };
+
+  // 客户端断开 → 中止上游请求
+  res.on('close', () => {
+    if (!streamEnded) {
+      try { proxyReq.destroy(); } catch {}
+      endStream(true);
+    }
+  });
 
   const proxyReq = transport.request(options, (proxyRes) => {
     console.log(`[backend] ← STREAM ${proxyRes.statusCode}`);
+    // TCP keep-alive：防止上游连接被路由器/防火墙因空闲断开
+    if (proxyReq.socket) {
+      proxyReq.socket.setKeepAlive(true, 60000);
+    }
+
     if (proxyRes.statusCode !== 200) {
       let data = '';
       proxyRes.on('data', chunk => { data += chunk; });
       proxyRes.on('end', () => {
         console.error(`[backend] ← STREAM 错误响应: ${data.substring(0, 500)}`);
         res.write(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: `后端返回 ${proxyRes.statusCode}: ${data}` } })}\n\n`);
-        res.end();
+        endStream(true);
       });
       return;
     }
@@ -165,6 +201,8 @@ function streamFetchOpenAI(config, openaiBody, res, createTransformer) {
         if (dataStr === '[DONE]') {
           const events = transformer.processChunk({ choices: [{ delta: {}, finish_reason: 'stop' }] });
           for (const evt of events) res.write(evt);
+          // 立即结束流，确保 response.completed / message_stop 事件被刷新到 socket
+          endStream(false);
           continue;
         }
         try {
@@ -176,30 +214,41 @@ function streamFetchOpenAI(config, openaiBody, res, createTransformer) {
     });
 
     proxyRes.on('end', () => {
+      // 处理残留 buffer（后端可能未发送 [DONE] 就关闭连接）
       if (buffer.trim() && !buffer.trim().includes('[DONE]')) {
         try {
           const dataStr = buffer.trim().slice(5).trim();
-          const parsed = JSON.parse(dataStr);
-          const events = transformer.processChunk(parsed);
-          for (const evt of events) res.write(evt);
+          if (dataStr) {
+            const parsed = JSON.parse(dataStr);
+            const events = transformer.processChunk(parsed);
+            for (const evt of events) res.write(evt);
+          }
         } catch { /* ignore */ }
       }
-      res.end();
+      // 强制完成：确保 response.completed / message_stop 一定被发出
+      endStream(!transformer.finished && !buffer.includes('[DONE]'));
     });
 
-    proxyRes.on('error', () => { res.end(); });
+    proxyRes.on('error', (err) => {
+      console.error(`[backend] ← STREAM 后端错误: ${err.message}`);
+      endStream(true);
+    });
   });
 
   proxyReq.on('error', (err) => {
     console.error(`[backend] ← STREAM 连接失败: ${err.message}`);
-    res.write(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: `后端连接失败: ${err.message}` } })}\n\n`);
-    res.end();
+    if (!streamEnded) {
+      res.write(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: `后端连接失败: ${err.message}` } })}\n\n`);
+      endStream(true);
+    }
   });
   proxyReq.on('timeout', () => {
     console.error('[backend] ← STREAM 超时');
     proxyReq.destroy();
-    res.write(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: '后端请求超时' } })}\n\n`);
-    res.end();
+    if (!streamEnded) {
+      res.write(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: '后端请求超时' } })}\n\n`);
+      endStream(true);
+    }
   });
   proxyReq.write(body);
   proxyReq.end();

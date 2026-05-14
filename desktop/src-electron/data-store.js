@@ -435,12 +435,19 @@ function getUsage(range) {
     data = [];
   }
   const now = Date.now();
-  const rangeMs = {
-    today: 24 * 60 * 60 * 1000,
-    '7d': 7 * 24 * 60 * 60 * 1000,
-    '30d': 30 * 24 * 60 * 60 * 1000
-  }[range] || (24 * 60 * 60 * 1000);
-  const cutoff = now - rangeMs;
+  let cutoff;
+  if (range === 'today') {
+    // 当天 0:00:00 ~ 23:59:59
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    cutoff = d.getTime();
+  } else {
+    const rangeMs = {
+      '7d': 7 * 24 * 60 * 60 * 1000,
+      '30d': 30 * 24 * 60 * 60 * 1000
+    }[range] || (24 * 60 * 60 * 1000);
+    cutoff = now - rangeMs;
+  }
   return data.filter(r => r.timestamp >= cutoff);
 }
 
