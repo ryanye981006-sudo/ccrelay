@@ -82,6 +82,9 @@ class StreamTransformer {
     this.toolUseBuf = {};
     // toolCallIndex → blockIndex 映射
     this.toolBlockIdx = {};
+    // think 标签剥离状态: 0=查找<think>, 1=在think内部, 2=已闭合
+    this._thinkState = 0;
+    this._thinkBuf = '';
   }
 
   // 关闭当前 content block（如果有）
@@ -110,6 +113,45 @@ class StreamTransformer {
       this.inputTokens = usage.prompt_tokens || 0;
       this.outputTokens = usage.completion_tokens || 0;
       this.cachedInputTokens = usage.prompt_tokens_details?.cached_tokens || usage.prompt_cache_hit_tokens || 0;
+    }
+
+    // 预处理器：从 delta.content 剥离 <think> 标签，转为 delta.reasoning_content
+    if (delta.content) {
+      if (this._thinkState < 2) {
+        this._thinkBuf += delta.content;
+        delta.content = undefined;
+
+        // 状态 0 → 1: 检测 <think> 开始
+        if (this._thinkState === 0) {
+          const idx = this._thinkBuf.indexOf('<think>');
+          if (idx >= 0) {
+            const before = this._thinkBuf.substring(0, idx);
+            this._thinkBuf = this._thinkBuf.substring(idx + 7).replace(/^\n/, '');
+            this._thinkState = 1;
+            if (before) delta.content = before;
+          } else {
+            delta.content = this._thinkBuf;
+            this._thinkBuf = '';
+          }
+        }
+
+        // 状态 1 → 2: 检测 </think> 闭合
+        if (this._thinkState === 1) {
+          const idx = this._thinkBuf.indexOf('</think>');
+          if (idx >= 0) {
+            if (idx > 0) delta.reasoning_content = this._thinkBuf.substring(0, idx);
+            this._thinkBuf = this._thinkBuf.substring(idx + 8).replace(/^\n/, '');
+            this._thinkState = 2;
+            if (this._thinkBuf) {
+              delta.content = (delta.content || '') + this._thinkBuf;
+              this._thinkBuf = '';
+            }
+          } else {
+            delta.reasoning_content = this._thinkBuf;
+            this._thinkBuf = '';
+          }
+        }
+      }
     }
 
     const events = [];
