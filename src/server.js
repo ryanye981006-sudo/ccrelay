@@ -73,7 +73,7 @@ function countTokens(body) {
         for (const block of content) {
           if (block.type === 'text') total += estimateTokens(block.text);
           else if (block.type === 'tool_use') total += estimateTokens(JSON.stringify(block.input)) + 5;
-          else if (block.type === 'tool_result') {
+          else if (block.type === 'thinking') total += estimateTokens(block.thinking || '') + 2;
             const tr = typeof block.content === 'string' ? block.content
               : (Array.isArray(block.content) ? block.content.map(b => b.text || '').join('') : '');
             total += estimateTokens(tr) + 2;
@@ -285,7 +285,7 @@ function createServer(config, serverType, serverConfig) {
 
     // 模型列表 — Claude 用 Anthropic 格式，Codex 用 OpenAI 格式
     if (req.method === 'GET' && (reqPath === '/v1/models' || reqPath === '/models')) {
-      const modelData = models.map(id => ({ id, display_name: id, type: 'model', created_at: '2025-01-01T00:00:00Z' }));
+      const modelData = models.map(id => ({ id, display_name: id, type: 'model', created_at: '2025-01-01T00:00:00Z', context_window: 131072, max_output_tokens: 8192 }));
       res.writeHead(200, { 'Content-Type': 'application/json' });
       if (serverType === 'codex') {
         // OpenAI 格式

@@ -436,13 +436,23 @@ function createCCServer(port) {
       return;
     }
 
-    // 模型列表
+    // 模型列表 — 返回 Anthropic 格式（CC 需要 context_window 等信息才能追踪上下文用量）
     if (req.method === 'GET' && (reqPath === '/v1/models' || reqPath === '/models')) {
       const routingKeys = getCategoryRoutingKeys('claude');
+      const models = routingKeys.map(m => ({
+        id: m,
+        display_name: m,
+        type: 'model',
+        created_at: '2025-01-01T00:00:00Z',
+        context_window: 131072,  // DeepSeek V3 默认 128K，给 Claude Code 合理的上下文感知
+        max_output_tokens: 8192,
+      }));
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
-        object: 'list',
-        data: routingKeys.map(id => ({ id, object: 'model', created: 1, owned_by: 'clauderelay' })),
+        data: models,
+        has_more: false,
+        first_id: models[0]?.id || '',
+        last_id: models[models.length - 1]?.id || '',
       }));
       return;
     }
@@ -451,8 +461,10 @@ function createCCServer(port) {
     if (req.method === 'POST' && reqPath === '/v1/messages/count_tokens') {
       try {
         const body = await readBody(req);
+        const count = countTokens(body);
+        proxyLog(`[claude] count_tokens → ${count}`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ input_tokens: countTokens(body) }));
+        res.end(JSON.stringify({ input_tokens: count }));
       } catch (e) {
         const err = errorResponse(e.message === 'invalid_json' ? 'invalid_request_error' : 'api_error', e.message, e.message === 'invalid_json' ? 400 : 500);
         res.writeHead(err.statusCode, err.headers); res.end(err.body);
