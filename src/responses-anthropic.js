@@ -3,6 +3,18 @@
 
 const { isVisionModel } = require('./vision');
 
+// 递归清理 JSON Schema 中 Anthropic 不支持的字段
+function cleanSchema(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(cleanSchema);
+  const cleaned = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (k === 'additionalProperties' || k === 'strict') continue;
+    cleaned[k] = typeof v === 'object' ? cleanSchema(v) : v;
+  }
+  return cleaned;
+}
+
 // 从 data URL 中解析 media_type 和 base64 数据
 function parseDataUrl(url) {
   const match = (url || '').match(/^data:([^;]+);base64,(.+)$/);
@@ -103,7 +115,7 @@ function responsesToAnthropic(body) {
       .map(t => ({
         name: t.name || '',
         description: t.description || '',
-        input_schema: t.parameters || {},
+        input_schema: cleanSchema(t.parameters || {}),
       }));
   }
 
