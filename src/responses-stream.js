@@ -112,13 +112,14 @@ class ResponsesStreamTransformer {
     // response.created + response.in_progress（首个有意义的 chunk 触发）
     if (!this.started && (delta.role || delta.content !== undefined || delta.tool_calls || delta.reasoning_content)) {
       this.started = true;
+      this.createdAt = Math.floor(Date.now() / 1000);
       events.push(sse('response.created', {
         type: 'response.created',
-        response: { id: this.respId, object: 'response', model: this.model, status: 'in_progress', output: [], usage: null },
+        response: { id: this.respId, object: 'response', created_at: this.createdAt, model: this.model, status: 'in_progress', output: [], usage: null },
       }));
       events.push(sse('response.in_progress', {
         type: 'response.in_progress',
-        response: { id: this.respId, object: 'response', status: 'in_progress', model: this.model, output: [], usage: null },
+        response: { id: this.respId, object: 'response', created_at: this.createdAt, status: 'in_progress', model: this.model, output: [], usage: null },
       }));
     }
     if (!this.started) return events;
@@ -195,7 +196,7 @@ class ResponsesStreamTransformer {
         events.push(sse('response.content_part.added', {
           type: 'response.content_part.added',
           item_id: this.msgId, output_index: outIdx, content_index: 0,
-          part: { type: 'text', text: '' },
+          part: { type: 'output_text', text: '' },
         }));
         events.push(sse('response.output_text.delta', {
           type: 'response.output_text.delta',
@@ -297,7 +298,7 @@ class ResponsesStreamTransformer {
         events.push(sse('response.content_part.done', {
           type: 'response.content_part.done',
           item_id: this.msgId, output_index: outIdx, content_index: 0,
-          part: { type: 'text', text: this.fullText },
+          part: { type: 'output_text', text: this.fullText },
         }));
         const textItem = {
           id: this.msgId, type: 'message', status: 'completed',
@@ -332,8 +333,8 @@ class ResponsesStreamTransformer {
       events.push(sse('response.completed', {
         type: 'response.completed',
         response: {
-          id: this.respId, object: 'response', model: this.model,
-          status: 'completed',
+          id: this.respId, object: 'response', created_at: this.createdAt || Math.floor(Date.now() / 1000),
+          model: this.model, status: 'completed',
           output: outputItems,
           usage: {
             input_tokens: this.inputTokens,
