@@ -211,6 +211,20 @@ function responsesToChat(body) {
   });
   console.log(`[responses] 最终消息 (${messages.length}): ${msgDump.join(' | ')}`);
 
+  // DeepSeek V4 thinking mode 一致性要求：
+  // 如果任意 assistant 消息有 reasoning_content，则所有 assistant 都必须有
+  const hasAnyReasoning = messages.some(m => m.role === 'assistant' && m.reasoning_content);
+  if (hasAnyReasoning) {
+    let fixed = 0;
+    for (const m of messages) {
+      if (m.role === 'assistant' && !m.reasoning_content) {
+        m.reasoning_content = '';
+        fixed++;
+      }
+    }
+    if (fixed > 0) console.log(`[responses] reasoning_content 一致性修补: ${fixed} 条`);
+  }
+
   const chatBody = {
     model: body.model,
     messages,
