@@ -1,6 +1,8 @@
 // ClaudeRelay Desktop — 独立服务器模式（免 Electron）
 // 启动代理引擎 + Web 管理界面
 
+process.env.NO_PROXY = 'localhost,127.0.0.1';
+
 const fs = require('fs');
 const path = require('path');
 const { createCodexServer, createCCServer, stopServer } = require('./src-electron/proxy-engine');

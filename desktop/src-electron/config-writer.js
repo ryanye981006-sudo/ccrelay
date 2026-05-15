@@ -3,6 +3,19 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { execSync } = require('child_process');
+
+// 设置 Windows 用户环境变量，确保 Codex (Go) 不通过代理连接本地地址
+// Go 的 net/http 默认读取系统代理，NO_PROXY 告诉它哪些地址直连
+function ensureNoProxy() {
+  try {
+    if (process.platform === 'win32') {
+      execSync('setx NO_PROXY "localhost,127.0.0.1"', { timeout: 3000 });
+    }
+  } catch {
+    // setx 可能因权限失败，不影响主流程
+  }
+}
 
 // Codex CLI 配置文件路径
 function getCodexConfigPath() {
@@ -52,6 +65,9 @@ function writeCodexConfig(routingKey, proxyPort) {
   const tmpFile = configPath + '.tmp';
   fs.writeFileSync(tmpFile, content, 'utf-8');
   fs.renameSync(tmpFile, configPath);
+
+  // 设置 NO_PROXY，让本地请求绕过系统代理（Clash 等）
+  ensureNoProxy();
 
   return { path: configPath, baseUrl, routingKey };
 }

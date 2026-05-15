@@ -1,5 +1,7 @@
 // Electron 主进程入口
 
+process.env.NO_PROXY = 'localhost,127.0.0.1';
+
 const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const http = require('http');
