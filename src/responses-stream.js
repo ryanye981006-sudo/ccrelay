@@ -302,7 +302,7 @@ class ResponsesStreamTransformer {
         const textItem = {
           id: this.msgId, type: 'message', status: 'completed',
           role: 'assistant',
-          content: [{ type: 'text', text: this.fullText }],
+          content: [{ type: 'output_text', text: this.fullText }],
         };
         events.push(sse('response.output_item.done', {
           type: 'response.output_item.done', output_index: outIdx, item: textItem,
