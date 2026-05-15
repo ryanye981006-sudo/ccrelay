@@ -204,6 +204,7 @@ class StreamTransformer {
           type: 'text_delta',
           text: delta.content,
         }));
+        console.log(`[stream] text block #${idx} start (text='') + first delta: "${delta.content.substring(0, 60)}"`);
         this.currentBlockType = 'text';
         this.blockIndex++;
       } else {
