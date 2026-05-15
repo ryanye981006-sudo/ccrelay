@@ -81,6 +81,7 @@ function convertInputEntry(entry, modelName) {
 
   // 普通 user / assistant 消息
   let role = entry.role || 'user';
+  if (role === 'developer') role = 'system';
   const blocks = convertContentBlocks(entry.content, modelName);
   if (blocks.length === 0) {
     blocks.push({ type: 'text', text: '' });
@@ -108,16 +109,16 @@ function responsesToAnthropic(body) {
   if (body.temperature !== undefined) result.temperature = body.temperature;
   if (body.top_p !== undefined) result.top_p = body.top_p;
 
-  // tools
-  if (body.tools && body.tools.length > 0) {
-    result.tools = body.tools
-      .filter(t => t.type === 'function' || t.name)
-      .map(t => ({
-        name: t.name || '',
-        description: t.description || '',
-        input_schema: cleanSchema(t.parameters || {}),
-      }));
-  }
+  // tools — 先跳过，DashScope /apps/anthropic 可能不支持 function calling
+  // if (body.tools && body.tools.length > 0) {
+  //   result.tools = body.tools
+  //     .filter(t => t.type === 'function' || t.name)
+  //     .map(t => ({
+  //       name: t.name || '',
+  //       description: t.description || '',
+  //       input_schema: cleanSchema(t.parameters || {}),
+  //     }));
+  // }
 
   // input[] → messages[]
   const messages = [];
@@ -141,8 +142,29 @@ function responsesToAnthropic(body) {
     merged.push(msg);
   }
 
-  result.messages = merged;
+  // 提取 system 消息到顶层（DashScope 兼容）
+  const sysTexts = [];
+  const nonSys = [];
+  for (const msg of merged) {
+    if (msg.role === 'system') {
+      sysTexts.push(extractTextContent(msg.content));
+    } else {
+      nonSys.push(msg);
+    }
+  }
+  if (sysTexts.length > 0) {
+    const existing = result.system || '';
+    result.system = existing ? existing + '\n\n' + sysTexts.join('\n\n') : sysTexts.join('\n\n');
+  }
+
+  result.messages = nonSys;
   return result;
+}
+
+function extractTextContent(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.filter(c => c.type === 'text').map(c => c.text).join('');
 }
 
 module.exports = { responsesToAnthropic };

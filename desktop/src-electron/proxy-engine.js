@@ -303,7 +303,13 @@ function streamAnthropicRelay(backend, anthropicBody, res, routingKey, category)
     rejectUnauthorized: false,
   };
   const streamId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-  proxyLog(`[stream ${streamId}] 开始 (Anthropic 透传) model=${backend.modelName} msgs=${bodyToSend.messages?.length || 0} tools=${bodyToSend.tools?.length || 0} hasSystem=${!!bodyToSend.system} maxTokens=${bodyToSend.max_tokens}`);
+  const msgDetail = (bodyToSend.messages || []).map((m, i) => {
+    const ct = Array.isArray(m.content) ? m.content.map(c => c.type).join(',') : typeof m.content;
+    return `[${i}]${m.role}:${ct}`;
+  }).join(' ');
+  // 只打印结构，不打印内容以避免污染日志
+  const firstMsgSample = bodyToSend.messages?.[0] ? JSON.stringify(bodyToSend.messages[0]).substring(0, 120) : 'none';
+  proxyLog(`[stream ${streamId}] Anthropic relay: model=${backend.modelName} msgs=${bodyToSend.messages?.length || 0}(${msgDetail}) firstMsg=${firstMsgSample} keys=${Object.keys(bodyToSend).join(',')}`);
 
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
 
@@ -338,7 +344,7 @@ function streamAnthropicRelay(backend, anthropicBody, res, routingKey, category)
       let data = '';
       proxyRes.on('data', chunk => { data += chunk; });
       proxyRes.on('end', () => {
-        proxyLog(`[stream ${streamId}] 后端错误 status=${proxyRes.statusCode} body=${data.substring(0, 500)}`);
+        proxyLog(`[stream ${streamId}] 后端错误 status=${proxyRes.statusCode} body=${data.substring(0, 500)} headers=${JSON.stringify(proxyRes.headers)}`);
         res.write(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: `后端返回 ${proxyRes.statusCode}: ${data.substring(0, 200)}` } })}\n\n`);
         endStream('backend-non200');
       });
@@ -431,33 +437,16 @@ function createCodexServer(port) {
         proxyLog(`[codex] ← ${isResponses ? 'Responses' : 'Chat'} routing=${responsesBody.model} → ${backend.apiBaseUrl} model=${backend.modelName} stream=${responsesBody.stream}`);
 
         if (backend.protocol === 'anthropic') {
-          // Anthropic 后端：Responses → Anthropic Messages 转换
-          const anthropicBody = responsesToAnthropic(responsesBody);
-          proxyLog(`[codex] 转换后 (Anthropic): ${anthropicBody.messages?.length || 0} 条消息`);
+          // Codex 需要 Responses API 格式响应，Anthropic 后端不支持
+          proxyLog(`[codex] 拒绝 Anthropic 后端: ${backend.apiBaseUrl}`);
+          const err = errorResponse('invalid_request_error',
+            `Codex 不支持 Anthropic 协议的后端（${backend.modelName}）。请在设置中将该模型的供应商协议改为 OpenAI，或使用 Claude Code 客户端。`,
+            400);
+          res.writeHead(err.statusCode, err.headers); res.end(err.body);
+          return;
+        }
 
-          if (responsesBody.stream || anthropicBody.stream) {
-            await streamAnthropicRelay(backend, anthropicBody, res, responsesBody.model, category);
-          } else {
-            const result = await fetchBackend(backend, anthropicBody);
-            if (result.status === 200) {
-              if (result.body && result.body.usage) {
-                logUsage({
-                  model: responsesBody.model, category: 'codex',
-                  inputTokens: result.body.usage.input_tokens || 0,
-                  cachedInputTokens: result.body.usage.cache_read_input_tokens || 0,
-                  outputTokens: result.body.usage.output_tokens || 0
-                });
-              }
-              res.writeHead(200, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify(result.body));
-            } else {
-              const errMsg = typeof result.body === 'object' && result.body.error ? result.body.error.message : `后端返回 ${result.status}`;
-              proxyLog(`[codex] 非流式后端错误 status=${result.status} body=${JSON.stringify(result.body).substring(0, 300)}`);
-              const err = errorResponse('api_error', errMsg, 502);
-              res.writeHead(err.statusCode, err.headers); res.end(err.body);
-            }
-          }
-        } else {
+        {
           // OpenAI 后端：Responses → Chat Completions 转换
           let openaiBody;
           if (isResponses) {
