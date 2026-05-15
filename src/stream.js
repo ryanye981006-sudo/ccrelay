@@ -52,14 +52,14 @@ function eventContentBlockStop(index) {
   });
 }
 
-function eventMessageDelta(stopReason, outputTokens) {
+function eventMessageDelta(stopReason, outputTokens, inputTokens) {
   return sseEvent('message_delta', {
     type: 'message_delta',
     delta: {
       stop_reason: stopReason,
       stop_sequence: null,
     },
-    usage: { output_tokens: outputTokens },
+    usage: { input_tokens: inputTokens || 0, output_tokens: outputTokens },
   });
 }
 
@@ -250,7 +250,7 @@ class StreamTransformer {
     if (finishReason) {
       this.finished = true;
       events.push(...this._closeCurrentBlock());
-      events.push(eventMessageDelta(mapFinishReason(finishReason), this.outputTokens));
+      events.push(eventMessageDelta(mapFinishReason(finishReason), this.outputTokens, this.inputTokens));
       events.push(eventMessageStop());
     }
 
