@@ -3,12 +3,14 @@ import { getProxyStatus } from './api';
 import CCTab from './pages/CCTab';
 import CodexTab from './pages/CodexTab';
 import ProviderTab from './pages/ProviderTab';
+import ModelsTab from './pages/ModelsTab';
 import UsageTab from './pages/UsageTab';
 
 const TABS = [
   { key: 'cc', label: 'CC' },
   { key: 'codex', label: 'Codex' },
   { key: 'provider', label: 'API 源' },
+  { key: 'models', label: '模型管理' },
   { key: 'usage', label: '用量' },
 ];
 
@@ -63,6 +65,7 @@ export default function App() {
           {activeTab === 'cc' && <CCTab />}
           {activeTab === 'codex' && <CodexTab />}
           {activeTab === 'provider' && <ProviderTab />}
+          {activeTab === 'models' && <ModelsTab />}
           {activeTab === 'usage' && <UsageTab />}
         </div>
       </div>

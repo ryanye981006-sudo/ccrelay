@@ -7,6 +7,7 @@ const path = require('path');
 const {
   getProviders, addProvider, updateProvider, deleteProvider,
   getModels, addModel, deleteModel,
+  getContextModels, addContextModel, removeContextModel,
   addConfig, deleteConfig, renameConfig,
   addModelToConfig, removeModelFromConfig,
   setActiveConfig, getConfigs, getActiveConfig,
@@ -82,6 +83,19 @@ function apiRouter(req, res, url, method, body, codexPort, ccPort) {
     return { data: { ok: true } };
   }
 
+  // Context Models CRUD（1M 上下文模型管理）
+  if (method === 'GET' && pathname === '/api/context-models') {
+    return { data: getContextModels() };
+  }
+  if (method === 'POST' && pathname === '/api/context-models') {
+    addContextModel(body.modelId);
+    return { data: { ok: true } };
+  }
+  if (method === 'DELETE' && pathname.startsWith('/api/context-models/')) {
+    removeContextModel(pathname.split('/').pop());
+    return { data: { ok: true } };
+  }
+
   // Config CRUD
   if (method === 'GET' && pathname.startsWith('/api/config/')) {
     return { data: getConfigs(pathname.split('/').pop()) };
@@ -115,7 +129,10 @@ function apiRouter(req, res, url, method, body, codexPort, ccPort) {
           return m ? modelRoutingKey(m) : '';
         });
         while (routingKeys.length < 4) routingKeys.push('');
-        if (routingKeys.some(k => k)) writeCCConfig(routingKeys, ccPort);
+        if (routingKeys.some(k => k)) {
+          const contextRoutingKeys = new Set(getContextModels().map(m => modelRoutingKey(m)));
+          writeCCConfig(routingKeys, ccPort, undefined, contextRoutingKeys);
+        }
       }
     }
     return { data: { ok: true } };
@@ -140,7 +157,10 @@ function apiRouter(req, res, url, method, body, codexPort, ccPort) {
           return m ? modelRoutingKey(m) : '';
         });
         while (routingKeys.length < 4) routingKeys.push('');
-        if (routingKeys.some(k => k)) writeCCConfig(routingKeys, ccPort);
+        if (routingKeys.some(k => k)) {
+          const contextRoutingKeys = new Set(getContextModels().map(m => modelRoutingKey(m)));
+          writeCCConfig(routingKeys, ccPort, undefined, contextRoutingKeys);
+        }
       }
     }
     return { data: { ok: true } };

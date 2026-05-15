@@ -41,6 +41,11 @@ export const setActiveConfig = (category, configId) => request('POST', '/config/
 // 代理状态
 export const getProxyStatus = () => request('GET', '/proxy-status');
 
+// 1M 上下文模型管理
+export const getContextModels = () => request('GET', '/context-models');
+export const addContextModel = (modelId) => request('POST', '/context-models', { modelId });
+export const removeContextModel = (modelId) => request('DELETE', `/context-models/${modelId}`);
+
 // 用量统计
 export const getUsage = (range) => request('GET', `/usage?range=${range}`);
 export const getUsageDetail = (modelKey, range, page, pageSize) =>

@@ -141,7 +141,7 @@ function anthropicToOpenAI(anthropicBody) {
 
   // 构建 OpenAI 请求体
   const openaiBody = {
-    model: anthropicBody.model,
+    model: anthropicBody.model?.replace('[1m]', ''),
     messages: openaiMessages,
   };
 

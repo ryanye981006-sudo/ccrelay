@@ -22,7 +22,7 @@ const DEFAULT_CC_CONFIG = {
     ANTHROPIC_DEFAULT_HAIKU_MODEL: '',
     ANTHROPIC_DEFAULT_SONNET_MODEL: '',
     ANTHROPIC_DEFAULT_OPUS_MODEL: '',
-    CLAUDE_CODE_MAX_CONTEXT_TOKENS: '950000'
+    CLAUDE_MAX_CONTEXT_WINDOW: '950000'
   }
 };
 
@@ -50,7 +50,8 @@ function ensureCCConfigFile(configPath) {
 // routingKeys: [主模型, haiku, sonnet, opus] — 与 modelIds 顺序一致
 // proxyPort: CC 代理端口
 // configPath: 可选，测试时指定临时路径
-function writeCCConfig(routingKeys, proxyPort, configPath) {
+// contextRoutingKeys: 可选，Set of routingKeys — 仅在此集合中的模型追加 [1m] 后缀
+function writeCCConfig(routingKeys, proxyPort, configPath, contextRoutingKeys) {
   const targetPath = ensureCCConfigFile(configPath);
   let config;
   try {
@@ -65,13 +66,15 @@ function writeCCConfig(routingKeys, proxyPort, configPath) {
   config.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
 
   // 上下文窗口上限 — 模型支持 1000K，保留余量
-  config.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = '950000';
+  config.env.CLAUDE_MAX_CONTEXT_WINDOW = '950000';
 
   // 按槽位写入模型路由键
   for (let i = 0; i < SLOT_FIELDS.length; i++) {
     const field = SLOT_FIELDS[i];
     const routingKey = routingKeys[i] || '';
-    config.env[field] = routingKey;
+    // 仅当模型在 1M 上下文列表中时才追加 [1m] 后缀
+    const shouldAppend1m = contextRoutingKeys && contextRoutingKeys.has(routingKey);
+    config.env[field] = routingKey ? routingKey.replace('[1m]', '') + (shouldAppend1m ? '[1m]' : '') : '';
   }
 
   // 原子写入

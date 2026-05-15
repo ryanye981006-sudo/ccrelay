@@ -13,7 +13,8 @@ const DEFAULT_DATA = {
   providers: [],
   models: [],
   codex: { configs: [], activeConfigId: null },
-  claude: { configs: [], activeConfigId: null }
+  claude: { configs: [], activeConfigId: null },
+  contextModelIds: []
 };
 
 // 生成简单 ID
@@ -180,6 +181,47 @@ function findProviderById(id) {
 function modelRoutingKey(model) {
   const provider = model.provider || findProviderById(model.providerId);
   return `${provider.name}/${model.name}`;
+}
+
+// ====== 1M 上下文模型管理 ======
+
+// 获取所有 1M 上下文模型（含完整模型和 Provider 信息）
+function getContextModels() {
+  const data = readData();
+  const ids = data.contextModelIds || [];
+  return ids.map(mid => {
+    const model = data.models.find(m => m.id === mid);
+    if (!model) return null;
+    const provider = data.providers.find(p => p.id === model.providerId);
+    return { ...model, provider: provider || null };
+  }).filter(Boolean);
+}
+
+// 添加模型到 1M 上下文列表
+function addContextModel(modelId) {
+  const data = readData();
+  if (!data.models.find(m => m.id === modelId)) {
+    throw new Error(`模型 ${modelId} 不存在`);
+  }
+  if (!data.contextModelIds) data.contextModelIds = [];
+  if (!data.contextModelIds.includes(modelId)) {
+    data.contextModelIds.push(modelId);
+  }
+  writeData(data);
+}
+
+// 从 1M 上下文列表移除模型
+function removeContextModel(modelId) {
+  const data = readData();
+  if (!data.contextModelIds) return;
+  data.contextModelIds = data.contextModelIds.filter(id => id !== modelId);
+  writeData(data);
+}
+
+// 检查模型是否在 1M 上下文列表中
+function isContextModel(modelId) {
+  const data = readData();
+  return (data.contextModelIds || []).includes(modelId);
 }
 
 // ====== 配置 CRUD ======
@@ -477,6 +519,8 @@ module.exports = {
   getProviders, addProvider, updateProvider, deleteProvider, findProviderByName,
   // Model
   getModels, addModel, deleteModel, getModelWithProvider,
+  // 1M 上下文模型
+  getContextModels, addContextModel, removeContextModel, isContextModel,
   // Config（新）
   addConfig, deleteConfig, renameConfig,
   addModelToConfig, removeModelFromConfig,

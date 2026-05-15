@@ -74,6 +74,7 @@ function countTokens(body) {
           if (block.type === 'text') total += estimateTokens(block.text);
           else if (block.type === 'tool_use') total += estimateTokens(JSON.stringify(block.input)) + 5;
           else if (block.type === 'thinking') total += estimateTokens(block.thinking || '') + 2;
+          else if (block.type === 'tool_result') {
             const tr = typeof block.content === 'string' ? block.content
               : (Array.isArray(block.content) ? block.content.map(b => b.text || '').join('') : '');
             total += estimateTokens(tr) + 2;
@@ -366,6 +367,10 @@ function createServer(config, serverType, serverConfig) {
           } else {
             openaiBody = responsesBody;
           }
+          // 剥离 [1m] 后缀后再发送给后端
+          const modelForBackend = typeof openaiBody.model === 'string' ? openaiBody.model.replace('[1m]', '') : openaiBody.model;
+          openaiBody.model = modelForBackend;
+
           if (responsesBody.stream || openaiBody.stream) {
             await streamFetchOpenAI(config, openaiBody, res, () => new ResponsesStreamTransformer(openaiBody.model));
           } else {

@@ -332,11 +332,12 @@ function createCodexServer(port) {
       try {
         const responsesBody = await readBody(req);
 
-        // 按 model 名前缀路由到对应后端
-        const backend = resolveBackend(responsesBody.model, category);
+        // 按 model 名前缀路由到对应后端（剥离 [1m] 后缀）
+        const codexModelForRouting = responsesBody.model?.replace('[1m]', '') || '';
+        const backend = resolveBackend(codexModelForRouting, category);
         if (!backend) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: `未知模型: ${responsesBody.model}，可用模型见 /v1/models` } }));
+          res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: `未知模型: ${codexModelForRouting}，可用模型见 /v1/models` } }));
           return;
         }
 
@@ -477,8 +478,9 @@ function createCCServer(port) {
       try {
         const anthropicBody = await readBody(req);
 
-        // 按 model 名前缀路由
-        const backend = resolveBackend(anthropicBody.model, category);
+        // 按 model 名前缀路由（剥离 [1m] 后缀后再匹配路由键）
+        const modelForRouting = anthropicBody.model?.replace('[1m]', '') || '';
+        const backend = resolveBackend(modelForRouting, category);
         if (!backend) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: `未知模型: ${anthropicBody.model}，可用模型见 /v1/models` } }));

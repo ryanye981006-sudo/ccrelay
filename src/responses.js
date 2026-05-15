@@ -57,10 +57,18 @@ function convertInputEntry(entry) {
   }
 
   if (entryType === 'function_call_output') {
+    let output = entry.output || '';
+    // DeepSeek 不支持 input_image 类型，过滤数组输出中的非文本块
+    if (Array.isArray(output)) {
+      output = output
+        .filter(part => part.type === 'input_text' || part.type === 'text' || part.type === 'output_text')
+        .map(part => part.text || '')
+        .join('');
+    }
     return {
       role: 'tool',
       tool_call_id: entry.call_id || '',
-      content: entry.output || '',
+      content: output,
     };
   }
 
@@ -226,7 +234,7 @@ function responsesToChat(body) {
   }
 
   const chatBody = {
-    model: body.model,
+    model: body.model?.replace('[1m]', ''),
     messages,
   };
 

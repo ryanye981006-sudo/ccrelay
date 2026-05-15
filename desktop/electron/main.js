@@ -9,7 +9,7 @@ const {
   getConfigs, addConfig, deleteConfig, renameConfig,
   addModelToConfig, removeModelFromConfig, setActiveConfig, getActiveConfig,
   getCategoryModels, addModelToCategory, removeModelFromCategory, setActiveModel, getActiveModel,
-  modelRoutingKey,
+  modelRoutingKey, getContextModels,
 } = require('../src-electron/data-store');
 const { writeCodexConfig, ensureConfigFile } = require('../src-electron/config-writer');
 const { writeCCConfig, ensureCCConfigFile } = require('../src-electron/cc-config-writer');
@@ -106,7 +106,10 @@ function registerIpcHandlers() {
           return m ? modelRoutingKey(m) : '';
         });
         while (routingKeys.length < 4) routingKeys.push('');
-        if (routingKeys.some(k => k)) writeCCConfig(routingKeys, CC_PORT);
+        if (routingKeys.some(k => k)) {
+          const contextRoutingKeys = new Set(getContextModels().map(m => modelRoutingKey(m)));
+          writeCCConfig(routingKeys, CC_PORT, undefined, contextRoutingKeys);
+        }
       }
     }
   });
@@ -128,7 +131,10 @@ function registerIpcHandlers() {
           return m ? modelRoutingKey(m) : '';
         });
         while (routingKeys.length < 4) routingKeys.push('');
-        if (routingKeys.some(k => k)) writeCCConfig(routingKeys, CC_PORT);
+        if (routingKeys.some(k => k)) {
+          const contextRoutingKeys = new Set(getContextModels().map(m => modelRoutingKey(m)));
+          writeCCConfig(routingKeys, CC_PORT, undefined, contextRoutingKeys);
+        }
       }
     }
   });
