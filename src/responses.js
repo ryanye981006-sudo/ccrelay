@@ -58,12 +58,9 @@ function convertInputEntry(entry) {
 
   if (entryType === 'function_call_output') {
     let output = entry.output || '';
-    // DeepSeek 不支持 input_image 类型，过滤数组输出中的非文本块
-    if (Array.isArray(output)) {
-      output = output
-        .filter(part => part.type === 'input_text' || part.type === 'text' || part.type === 'output_text')
-        .map(part => part.text || '')
-        .join('');
+    // 非字符串内容 JSON 序列化，避免 input_image 等类型直接暴露给后端（参考 cc-switch）
+    if (typeof output !== 'string') {
+      output = JSON.stringify(output);
     }
     return {
       role: 'tool',
@@ -78,10 +75,26 @@ function convertInputEntry(entry) {
   let content = entry.content;
 
   if (Array.isArray(content)) {
-    content = content
-      .filter(part => part.type === 'input_text' || part.type === 'text' || part.type === 'output_text')
-      .map(part => part.text)
-      .join('');
+    // 检查是否有 input_image 块（仅 user 消息会出现）
+    const hasImages = content.some(part => part.type === 'input_image');
+
+    if (hasImages && role === 'user') {
+      // 多模态：input_image → image_url（OpenAI 视觉格式）
+      content = content
+        .filter(part => part.type === 'input_text' || part.type === 'text' || part.type === 'output_text' || part.type === 'input_image')
+        .map(part => {
+          if (part.type === 'input_image') {
+            return { type: 'image_url', image_url: { url: part.image_url || '' } };
+          }
+          return { type: 'text', text: part.text || '' };
+        });
+    } else {
+      // 纯文本：保持字符串（兼容性最好）
+      content = content
+        .filter(part => part.type === 'input_text' || part.type === 'text' || part.type === 'output_text')
+        .map(part => part.text)
+        .join('');
+    }
   }
 
   // assistant 消息：提取 <think/> 标签为 reasoning_content
