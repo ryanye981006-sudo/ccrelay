@@ -549,7 +549,12 @@ function createCCServer(port) {
 
 function stopServer(server) {
   return new Promise((resolve) => {
+    // 强制关闭所有活跃连接（SSE 长连接有心跳保活，不会自然断开）
+    // server.close() 只拒绝新连接，不关闭已有连接
+    if (server.closeAllConnections) server.closeAllConnections();
     server.close(() => resolve());
+    // 超时兜底：1 秒后无论如何 resolve
+    setTimeout(resolve, 1000);
   });
 }
 
