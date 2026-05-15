@@ -172,8 +172,13 @@ class StreamTransformer {
     if (hasReasoning) {
       if (this.currentBlockType !== 'thinking') {
         events.push(...this._closeCurrentBlock());
-        events.push(eventContentBlockStart(this.blockIndex, {
+        const idx = this.blockIndex;
+        events.push(eventContentBlockStart(idx, {
           type: 'thinking',
+          thinking: '',
+        }));
+        events.push(eventContentBlockDelta(idx, {
+          type: 'thinking_delta',
           thinking: delta.reasoning_content,
         }));
         this.currentBlockType = 'thinking';
@@ -190,8 +195,13 @@ class StreamTransformer {
     if (hasContent && delta.content !== '') {
       if (this.currentBlockType !== 'text') {
         events.push(...this._closeCurrentBlock());
-        events.push(eventContentBlockStart(this.blockIndex, {
+        const idx = this.blockIndex;
+        events.push(eventContentBlockStart(idx, {
           type: 'text',
+          text: '',
+        }));
+        events.push(eventContentBlockDelta(idx, {
+          type: 'text_delta',
           text: delta.content,
         }));
         this.currentBlockType = 'text';

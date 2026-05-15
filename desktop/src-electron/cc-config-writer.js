@@ -21,7 +21,8 @@ const DEFAULT_CC_CONFIG = {
     ANTHROPIC_MODEL: '',
     ANTHROPIC_DEFAULT_HAIKU_MODEL: '',
     ANTHROPIC_DEFAULT_SONNET_MODEL: '',
-    ANTHROPIC_DEFAULT_OPUS_MODEL: ''
+    ANTHROPIC_DEFAULT_OPUS_MODEL: '',
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: '950000'
   }
 };
 
@@ -62,6 +63,9 @@ function writeCCConfig(routingKeys, proxyPort, configPath) {
 
   // 写入 ANTHROPIC_BASE_URL
   config.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
+
+  // 上下文窗口上限 — 模型支持 1000K，保留余量
+  config.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = '950000';
 
   // 按槽位写入模型路由键
   for (let i = 0; i < SLOT_FIELDS.length; i++) {

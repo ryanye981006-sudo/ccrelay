@@ -285,7 +285,7 @@ function createServer(config, serverType, serverConfig) {
 
     // 模型列表 — Claude 用 Anthropic 格式，Codex 用 OpenAI 格式
     if (req.method === 'GET' && (reqPath === '/v1/models' || reqPath === '/models')) {
-      const modelData = models.map(id => ({ id, display_name: id, type: 'model', created_at: '2025-01-01T00:00:00Z', context_window: 131072, max_output_tokens: 8192 }));
+      const modelData = models.map(id => ({ id, display_name: id, type: 'model', created_at: '2025-01-01T00:00:00Z', context_window: 950000, max_output_tokens: 8192 }));
       res.writeHead(200, { 'Content-Type': 'application/json' });
       if (serverType === 'codex') {
         // OpenAI 格式

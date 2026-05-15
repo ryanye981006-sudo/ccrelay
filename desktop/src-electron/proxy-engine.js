@@ -444,7 +444,7 @@ function createCCServer(port) {
         display_name: m,
         type: 'model',
         created_at: '2025-01-01T00:00:00Z',
-        context_window: 131072,  // DeepSeek V3 默认 128K，给 Claude Code 合理的上下文感知
+        context_window: 950000,  // DeepSeek V4 支持 1000K，预留余量
         max_output_tokens: 8192,
       }));
       res.writeHead(200, { 'Content-Type': 'application/json' });
