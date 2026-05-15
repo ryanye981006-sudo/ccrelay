@@ -14,6 +14,7 @@ function resolveSrc(moduleName) {
   return require.resolve(path.join(__dirname, '..', '..', 'src', moduleName));
 }
 
+const { responsesToAnthropic } = require(resolveSrc('responses-anthropic'));
 const { anthropicToOpenAI } = require(resolveSrc('request'));
 const { openaiToAnthropic } = require(resolveSrc('response'));
 const { StreamTransformer } = require(resolveSrc('stream'));
@@ -285,6 +286,91 @@ function streamFetchBackend(backend, openaiBody, res, createTransformer, routing
   proxyReq.end();
 }
 
+// Anthropic 协议 SSE 透传（Claude Code 路径，不转 OpenAI 格式）
+function streamAnthropicRelay(backend, anthropicBody, res, routingKey, category) {
+  const endpointPath = '/v1/messages';
+  const chatUrl = buildApiUrl(backend.apiBaseUrl, endpointPath);
+  const url = new URL(chatUrl);
+  const isHttps = url.protocol === 'https:';
+  const transport = isHttps ? https : http;
+  const bodyToSend = { ...anthropicBody, model: backend.modelName };
+  const body = JSON.stringify(bodyToSend);
+  const options = {
+    hostname: url.hostname, port: url.port || (isHttps ? 443 : 80),
+    path: url.pathname + url.search, method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'Authorization': `Bearer ${backend.apiKey}`, 'Accept': 'text/event-stream' },
+    timeout: 0,
+    rejectUnauthorized: false,
+  };
+  const streamId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  proxyLog(`[stream ${streamId}] 开始 (Anthropic 透传) model=${backend.modelName}`);
+
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
+
+  let buffer = '';
+  let streamEnded = false;
+
+  const heartbeat = setInterval(() => {
+    if (!streamEnded) {
+      try { res.write('event: ping\ndata: {}\n\n'); } catch {}
+    }
+  }, 15000);
+
+  const endStream = (reason) => {
+    if (streamEnded) return;
+    streamEnded = true;
+    clearInterval(heartbeat);
+    proxyLog(`[stream ${streamId}] 结束 reason=${reason}`);
+    try { res.end(); } catch {}
+  };
+
+  res.on('close', () => {
+    if (!streamEnded) {
+      try { proxyReq.destroy(); } catch {}
+      endStream('client-close');
+    }
+  });
+
+  const proxyReq = transport.request(options, (proxyRes) => {
+    proxyLog(`[stream ${streamId}] 后端响应 status=${proxyRes.statusCode}`);
+
+    if (proxyRes.statusCode !== 200) {
+      let data = '';
+      proxyRes.on('data', chunk => { data += chunk; });
+      proxyRes.on('end', () => {
+        proxyLog(`[stream ${streamId}] 后端错误响应: ${data.substring(0, 300)}`);
+        res.write(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: `后端返回 ${proxyRes.statusCode}` } })}\n\n`);
+        endStream('backend-non200');
+      });
+      return;
+    }
+
+    // 透传 SSE 数据
+    proxyRes.on('data', (chunk) => {
+      try { res.write(chunk); } catch {}
+    });
+
+    proxyRes.on('end', () => {
+      endStream('backend-end');
+    });
+
+    proxyRes.on('error', (err) => {
+      proxyLog(`[stream ${streamId}] 后端流错误: ${err.message}`);
+      endStream('backend-error');
+    });
+  });
+
+  proxyReq.on('error', (err) => {
+    proxyLog(`[stream ${streamId}] 上游连接失败: ${err.message}`);
+    if (!streamEnded) {
+      res.write(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: `后端连接失败: ${err.message}` } })}\n\n`);
+      endStream('upstream-error');
+    }
+  });
+  proxyReq.write(body);
+  proxyReq.end();
+}
+
 // ====== 创建代理服务 ======
 
 function createCodexServer(port) {
@@ -344,43 +430,71 @@ function createCodexServer(port) {
         const isResponses = responsesBody.input !== undefined || responsesBody.instructions !== undefined;
         proxyLog(`[codex] ← ${isResponses ? 'Responses' : 'Chat'} routing=${responsesBody.model} → ${backend.apiBaseUrl} model=${backend.modelName} stream=${responsesBody.stream}`);
 
-        let openaiBody;
-        if (isResponses) {
-          openaiBody = responsesToChat(responsesBody);
-          // 诊断：打印转换后的消息结构到 proxy.log
-          const msgDump = openaiBody.messages.map((m, idx) => {
-            const tc = m.tool_calls ? ` tool_calls=[${m.tool_calls.map(t => t.id).join(',')}]` : '';
-            const rc = m.reasoning_content ? ` reasoning=${m.reasoning_content.length}chars` : '';
-            const ct = m.content ? ` content=${typeof m.content === 'string' ? m.content.substring(0, 60) : JSON.stringify(m.content).substring(0, 60)}` : '';
-            return `[${idx}] ${m.role}${tc}${rc}${ct}`;
-          });
-          proxyLog(`[codex] 转换后消息 (${openaiBody.messages.length}): ${msgDump.join(' | ')}`);
-        } else {
-          openaiBody = responsesBody;
-        }
+        if (backend.protocol === 'anthropic') {
+          // Anthropic 后端：Responses → Anthropic Messages 转换
+          const anthropicBody = responsesToAnthropic(responsesBody);
+          proxyLog(`[codex] 转换后 (Anthropic): ${anthropicBody.messages?.length || 0} 条消息`);
 
-        if (responsesBody.stream || openaiBody.stream) {
-          await streamFetchBackend(backend, openaiBody, res, () => new ResponsesStreamTransformer(openaiBody.model), responsesBody.model, category);
-        } else {
-          const result = await fetchBackend(backend, openaiBody);
-          if (result.status === 200) {
-            if (result.body && result.body.usage) {
-              logUsage({
-                model: responsesBody.model,
-                category: 'codex',
-                inputTokens: result.body.usage.prompt_tokens || 0,
-                cachedInputTokens: result.body.usage.prompt_tokens_details?.cached_tokens || result.body.usage.prompt_cache_hit_tokens || 0,
-                outputTokens: result.body.usage.completion_tokens || 0
-              });
-            }
-            const responsesResponse = chatToResponses(result.body);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(responsesResponse));
+          if (responsesBody.stream || anthropicBody.stream) {
+            await streamAnthropicRelay(backend, anthropicBody, res, responsesBody.model, category);
           } else {
-            const errMsg = typeof result.body === 'object' && result.body.error ? result.body.error.message : `后端返回 ${result.status}`;
-            proxyLog(`[codex] 非流式后端错误 status=${result.status} body=${JSON.stringify(result.body).substring(0, 300)}`);
-            const err = errorResponse('api_error', errMsg, 502);
-            res.writeHead(err.statusCode, err.headers); res.end(err.body);
+            const result = await fetchBackend(backend, anthropicBody);
+            if (result.status === 200) {
+              if (result.body && result.body.usage) {
+                logUsage({
+                  model: responsesBody.model, category: 'codex',
+                  inputTokens: result.body.usage.input_tokens || 0,
+                  cachedInputTokens: result.body.usage.cache_read_input_tokens || 0,
+                  outputTokens: result.body.usage.output_tokens || 0
+                });
+              }
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify(result.body));
+            } else {
+              const errMsg = typeof result.body === 'object' && result.body.error ? result.body.error.message : `后端返回 ${result.status}`;
+              proxyLog(`[codex] 非流式后端错误 status=${result.status} body=${JSON.stringify(result.body).substring(0, 300)}`);
+              const err = errorResponse('api_error', errMsg, 502);
+              res.writeHead(err.statusCode, err.headers); res.end(err.body);
+            }
+          }
+        } else {
+          // OpenAI 后端：Responses → Chat Completions 转换
+          let openaiBody;
+          if (isResponses) {
+            openaiBody = responsesToChat(responsesBody);
+            const msgDump = openaiBody.messages.map((m, idx) => {
+              const tc = m.tool_calls ? ` tool_calls=[${m.tool_calls.map(t => t.id).join(',')}]` : '';
+              const rc = m.reasoning_content ? ` reasoning=${m.reasoning_content.length}chars` : '';
+              const ct = m.content ? ` content=${typeof m.content === 'string' ? m.content.substring(0, 60) : JSON.stringify(m.content).substring(0, 60)}` : '';
+              return `[${idx}] ${m.role}${tc}${rc}${ct}`;
+            });
+            proxyLog(`[codex] 转换后消息 (${openaiBody.messages.length}): ${msgDump.join(' | ')}`);
+          } else {
+            openaiBody = responsesBody;
+          }
+
+          if (responsesBody.stream || openaiBody.stream) {
+            await streamFetchBackend(backend, openaiBody, res, () => new ResponsesStreamTransformer(openaiBody.model), responsesBody.model, category);
+          } else {
+            const result = await fetchBackend(backend, openaiBody);
+            if (result.status === 200) {
+              if (result.body && result.body.usage) {
+                logUsage({
+                  model: responsesBody.model, category: 'codex',
+                  inputTokens: result.body.usage.prompt_tokens || 0,
+                  cachedInputTokens: result.body.usage.prompt_tokens_details?.cached_tokens || result.body.usage.prompt_cache_hit_tokens || 0,
+                  outputTokens: result.body.usage.completion_tokens || 0
+                });
+              }
+              const responsesResponse = chatToResponses(result.body);
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify(responsesResponse));
+            } else {
+              const errMsg = typeof result.body === 'object' && result.body.error ? result.body.error.message : `后端返回 ${result.status}`;
+              proxyLog(`[codex] 非流式后端错误 status=${result.status} body=${JSON.stringify(result.body).substring(0, 300)}`);
+              const err = errorResponse('api_error', errMsg, 502);
+              res.writeHead(err.statusCode, err.headers); res.end(err.body);
+            }
           }
         }
       } catch (e) {
@@ -489,39 +603,61 @@ function createCCServer(port) {
 
         proxyLog(`[claude] ← Anthropic routing=${anthropicBody.model} → ${backend.apiBaseUrl} model=${backend.modelName} stream=${anthropicBody.stream}`);
 
-        const openaiBody = anthropicToOpenAI(anthropicBody);
-
-        // 诊断：打印转换后的消息结构（重点检查 reasoning_content）
-        const msgDump = openaiBody.messages.map((m, idx) => {
-          const tc = m.tool_calls ? ` tool_calls=[${m.tool_calls.map(t => t.id).join(',')}]` : '';
-          const rc = m.reasoning_content ? ` reasoning=${m.reasoning_content.length}chars` : ' reasoning=MISSING';
-          const ct = m.content ? ` content=${typeof m.content === 'string' ? m.content.substring(0, 80) : JSON.stringify(m.content).substring(0, 80)}` : ' content=null';
-          return `[${idx}] ${m.role}${tc}${rc}${ct}`;
-        });
-        proxyLog(`[claude] 转换后消息 (${openaiBody.messages.length}): ${msgDump.join(' | ')}`);
-
-        if (anthropicBody.stream) {
-          const inputTokens = countTokens(anthropicBody);
-          await streamFetchBackend(backend, openaiBody, res, () => new StreamTransformer(openaiBody.model, inputTokens), anthropicBody.model, category);
-        } else {
-          const result = await fetchBackend(backend, openaiBody);
-          if (result.status === 200) {
-            if (result.body && result.body.usage) {
-              logUsage({
-                model: anthropicBody.model,
-                category: 'claude',
-                inputTokens: result.body.usage.prompt_tokens || 0,
-                cachedInputTokens: result.body.usage.prompt_tokens_details?.cached_tokens || result.body.usage.prompt_cache_hit_tokens || 0,
-                outputTokens: result.body.usage.completion_tokens || 0
-              });
-            }
-            const anthropicResponse = openaiToAnthropic(result.body);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(anthropicResponse));
+        if (backend.protocol === 'anthropic') {
+          // Anthropic 后端：原样透传，不做格式转换
+          if (anthropicBody.stream) {
+            await streamAnthropicRelay(backend, anthropicBody, res, anthropicBody.model, category);
           } else {
-            const errMsg = typeof result.body === 'object' && result.body.error ? result.body.error.message : `后端返回 ${result.status}`;
-            const err = errorResponse('api_error', errMsg, 502);
-            res.writeHead(err.statusCode, err.headers); res.end(err.body);
+            const result = await fetchBackend(backend, anthropicBody);
+            if (result.status === 200) {
+              if (result.body && result.body.usage) {
+                logUsage({
+                  model: anthropicBody.model, category: 'claude',
+                  inputTokens: result.body.usage.input_tokens || 0,
+                  cachedInputTokens: result.body.usage.cache_read_input_tokens || 0,
+                  outputTokens: result.body.usage.output_tokens || 0
+                });
+              }
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify(result.body));
+            } else {
+              const errMsg = typeof result.body === 'object' && result.body.error ? result.body.error.message : `后端返回 ${result.status}`;
+              const err = errorResponse('api_error', errMsg, 502);
+              res.writeHead(err.statusCode, err.headers); res.end(err.body);
+            }
+          }
+        } else {
+          // OpenAI 后端：Anthropic → Chat Completions 转换
+          const openaiBody = anthropicToOpenAI(anthropicBody);
+          proxyLog(`[claude] 转换后消息 (${openaiBody.messages.length}): ${openaiBody.messages.map((m, idx) => {
+            const tc = m.tool_calls ? ` tool_calls=[${m.tool_calls.map(t => t.id).join(',')}]` : '';
+            const rc = m.reasoning_content ? ` reasoning=${m.reasoning_content.length}chars` : ' reasoning=MISSING';
+            const ct = m.content ? ` content=${typeof m.content === 'string' ? m.content.substring(0, 80) : JSON.stringify(m.content).substring(0, 80)}` : ' content=null';
+            return `[${idx}] ${m.role}${tc}${rc}${ct}`;
+          }).join(' | ')}`);
+
+          if (anthropicBody.stream) {
+            const inputTokens = countTokens(anthropicBody);
+            await streamFetchBackend(backend, openaiBody, res, () => new StreamTransformer(openaiBody.model, inputTokens), anthropicBody.model, category);
+          } else {
+            const result = await fetchBackend(backend, openaiBody);
+            if (result.status === 200) {
+              if (result.body && result.body.usage) {
+                logUsage({
+                  model: anthropicBody.model, category: 'claude',
+                  inputTokens: result.body.usage.prompt_tokens || 0,
+                  cachedInputTokens: result.body.usage.prompt_tokens_details?.cached_tokens || result.body.usage.prompt_cache_hit_tokens || 0,
+                  outputTokens: result.body.usage.completion_tokens || 0
+                });
+              }
+              const anthropicResponse = openaiToAnthropic(result.body);
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify(anthropicResponse));
+            } else {
+              const errMsg = typeof result.body === 'object' && result.body.error ? result.body.error.message : `后端返回 ${result.status}`;
+              const err = errorResponse('api_error', errMsg, 502);
+              res.writeHead(err.statusCode, err.headers); res.end(err.body);
+            }
           }
         }
       } catch (e) {

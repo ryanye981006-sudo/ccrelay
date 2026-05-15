@@ -364,7 +364,7 @@ function getActiveConfig(category) {
 
 // ====== 路由解析（基于激活配置） ======
 
-// 根据路由键解析 Provider 和模型（仅在激活配置的 modelIds 中查找）
+// 根据路由键解析 Provider 和模型（查找分类下所有配置）
 function resolveRoutingKey(routingKey, category) {
   const data = readData();
   const idx = routingKey.indexOf('/');
@@ -372,27 +372,44 @@ function resolveRoutingKey(routingKey, category) {
   const providerName = routingKey.substring(0, idx);
   const modelName = routingKey.substring(idx + 1);
   const cat = data[category];
-  if (!cat || !cat.activeConfigId) return null;
-  const activeCfg = cat.configs.find(c => c.id === cat.activeConfigId);
-  if (!activeCfg) return null;
-  // 在激活配置的 modelIds 中查找
+  if (!cat || !cat.configs || cat.configs.length === 0) return null;
+  // 收集该分类下所有配置的 modelIds（去重），不限于激活配置
+  const allModelIds = new Set();
+  for (const cfg of cat.configs) {
+    for (const mid of cfg.modelIds || []) {
+      allModelIds.add(mid);
+    }
+  }
   const matchingProviders = data.providers.filter(p => p.name === providerName);
   for (const provider of matchingProviders) {
     const model = data.models.find(m =>
       m.providerId === provider.id &&
       m.name === modelName &&
-      activeCfg.modelIds.includes(m.id)
+      allModelIds.has(m.id)
     );
     if (model) return { provider, model };
   }
   return null;
 }
 
-// 获取激活配置下所有模型的路由键列表
+// 获取分类下所有配置的模型路由键列表（去重）
 function getCategoryRoutingKeys(category) {
-  const activeCfg = getActiveConfig(category);
-  if (!activeCfg) return [];
-  return activeCfg.models.map(m => modelRoutingKey(m));
+  const data = readData();
+  const cat = data[category];
+  if (!cat || !cat.configs) return [];
+  const seen = new Set();
+  const keys = [];
+  for (const cfg of cat.configs) {
+    for (const mid of cfg.modelIds || []) {
+      const model = data.models.find(m => m.id === mid);
+      if (!model) continue;
+      const key = modelRoutingKey(model);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      keys.push(key);
+    }
+  }
+  return keys;
 }
 
 // ====== 兼容旧 API（委托到激活配置） ======

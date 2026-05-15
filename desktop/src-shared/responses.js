@@ -1,5 +1,7 @@
 // OpenAI Responses API 请求体 → OpenAI Chat Completions 请求体转换
 
+const { isVisionModel } = require('./vision');
+
 // 递归清理 JSON Schema 中 DeepSeek 不支持的字段
 function cleanSchema(obj) {
   if (!obj || typeof obj !== 'object') return obj;
@@ -38,7 +40,7 @@ function extractThinkContent(text) {
 }
 
 // input 条目转为 messages[]，处理 function_call / function_call_output
-function convertInputEntry(entry) {
+function convertInputEntry(entry, modelName) {
   const entryType = entry.type || entry.role || '';
 
   if (entryType === 'function_call') {
@@ -57,10 +59,15 @@ function convertInputEntry(entry) {
   }
 
   if (entryType === 'function_call_output') {
+    let output = entry.output || '';
+    // 非字符串内容 JSON 序列化，避免 input_image 等类型直接暴露给后端（参考 cc-switch）
+    if (typeof output !== 'string') {
+      output = JSON.stringify(output);
+    }
     return {
       role: 'tool',
       tool_call_id: entry.call_id || '',
-      content: entry.output || '',
+      content: output,
     };
   }
 
@@ -70,10 +77,26 @@ function convertInputEntry(entry) {
   let content = entry.content;
 
   if (Array.isArray(content)) {
-    content = content
-      .filter(part => part.type === 'input_text' || part.type === 'text' || part.type === 'output_text')
-      .map(part => part.text)
-      .join('');
+    // 检查是否有 input_image 块（仅 user 消息会出现）
+    const hasImages = content.some(part => part.type === 'input_image');
+
+    if (hasImages && role === 'user' && isVisionModel(modelName)) {
+      // 多模态：input_image → image_url（OpenAI 视觉格式）
+      content = content
+        .filter(part => part.type === 'input_text' || part.type === 'text' || part.type === 'output_text' || part.type === 'input_image')
+        .map(part => {
+          if (part.type === 'input_image') {
+            return { type: 'image_url', image_url: { url: part.image_url || '' } };
+          }
+          return { type: 'text', text: part.text || '' };
+        });
+    } else {
+      // 纯文本：保持字符串（兼容性最好）
+      content = content
+        .filter(part => part.type === 'input_text' || part.type === 'text' || part.type === 'output_text')
+        .map(part => part.text)
+        .join('');
+    }
   }
 
   // assistant 消息：提取 <think/> 标签为 reasoning_content
@@ -117,7 +140,7 @@ function responsesToChat(body) {
         continue;
       }
 
-      const msg = convertInputEntry(entry);
+      const msg = convertInputEntry(entry, body.model);
 
       // 把累积的 reasoning_content 附加到 assistant 消息
       if (pendingReasoning && msg.role === 'assistant') {
@@ -226,7 +249,7 @@ function responsesToChat(body) {
   }
 
   const chatBody = {
-    model: body.model,
+    model: body.model?.replace('[1m]', ''),
     messages,
   };
 

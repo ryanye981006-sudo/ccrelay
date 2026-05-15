@@ -1,5 +1,7 @@
 // OpenAI Responses API 请求体 → OpenAI Chat Completions 请求体转换
 
+const { isVisionModel } = require('./vision');
+
 // 递归清理 JSON Schema 中 DeepSeek 不支持的字段
 function cleanSchema(obj) {
   if (!obj || typeof obj !== 'object') return obj;
@@ -38,7 +40,7 @@ function extractThinkContent(text) {
 }
 
 // input 条目转为 messages[]，处理 function_call / function_call_output
-function convertInputEntry(entry) {
+function convertInputEntry(entry, modelName) {
   const entryType = entry.type || entry.role || '';
 
   if (entryType === 'function_call') {
@@ -78,7 +80,7 @@ function convertInputEntry(entry) {
     // 检查是否有 input_image 块（仅 user 消息会出现）
     const hasImages = content.some(part => part.type === 'input_image');
 
-    if (hasImages && role === 'user') {
+    if (hasImages && role === 'user' && isVisionModel(modelName)) {
       // 多模态：input_image → image_url（OpenAI 视觉格式）
       content = content
         .filter(part => part.type === 'input_text' || part.type === 'text' || part.type === 'output_text' || part.type === 'input_image')
@@ -138,7 +140,7 @@ function responsesToChat(body) {
         continue;
       }
 
-      const msg = convertInputEntry(entry);
+      const msg = convertInputEntry(entry, body.model);
 
       // 把累积的 reasoning_content 附加到 assistant 消息
       if (pendingReasoning && msg.role === 'assistant') {

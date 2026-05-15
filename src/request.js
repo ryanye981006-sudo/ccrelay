@@ -1,5 +1,7 @@
 // Anthropic Messages 请求体 → OpenAI Chat Completions 请求体转换
 
+const { isVisionModel } = require('./vision');
+
 function extractText(content) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -9,7 +11,7 @@ function extractText(content) {
     .join('');
 }
 
-function convertUserMessage(msg) {
+function convertUserMessage(msg, modelName) {
   const content = msg.content;
   if (typeof content === 'string') {
     return { role: 'user', content };
@@ -27,15 +29,14 @@ function convertUserMessage(msg) {
   }
 
   // 普通用户消息：text + 可选的 image
-  const textBlocks = content.filter(block => block.type === 'text');
   const imageBlocks = content.filter(block => block.type === 'image');
 
-  if (imageBlocks.length === 0) {
-    // 纯文本
+  // 非视觉模型：丢弃图片，只保留文本
+  if (imageBlocks.length === 0 || !isVisionModel(modelName)) {
     return { role: 'user', content: extractText(content) };
   }
 
-  // 多模态消息
+  // 多模态消息（仅视觉模型）
   const parts = [];
   for (const block of content) {
     if (block.type === 'text') {
@@ -121,7 +122,7 @@ function anthropicToOpenAI(anthropicBody) {
     let converted;
     switch (msg.role) {
       case 'user':
-        converted = convertUserMessage(msg);
+        converted = convertUserMessage(msg, anthropicBody.model);
         break;
       case 'assistant':
         converted = convertAssistantMessage(msg);
