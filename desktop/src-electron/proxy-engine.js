@@ -477,6 +477,15 @@ function createCCServer(port) {
 
         const openaiBody = anthropicToOpenAI(anthropicBody);
 
+        // 诊断：打印转换后的消息结构（重点检查 reasoning_content）
+        const msgDump = openaiBody.messages.map((m, idx) => {
+          const tc = m.tool_calls ? ` tool_calls=[${m.tool_calls.map(t => t.id).join(',')}]` : '';
+          const rc = m.reasoning_content ? ` reasoning=${m.reasoning_content.length}chars` : ' reasoning=MISSING';
+          const ct = m.content ? ` content=${typeof m.content === 'string' ? m.content.substring(0, 80) : JSON.stringify(m.content).substring(0, 80)}` : ' content=null';
+          return `[${idx}] ${m.role}${tc}${rc}${ct}`;
+        });
+        proxyLog(`[claude] 转换后消息 (${openaiBody.messages.length}): ${msgDump.join(' | ')}`);
+
         if (anthropicBody.stream) {
           const inputTokens = countTokens(anthropicBody);
           await streamFetchBackend(backend, openaiBody, res, () => new StreamTransformer(openaiBody.model, inputTokens), anthropicBody.model, category);
