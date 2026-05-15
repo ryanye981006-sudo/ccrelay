@@ -303,7 +303,7 @@ function streamAnthropicRelay(backend, anthropicBody, res, routingKey, category)
     rejectUnauthorized: false,
   };
   const streamId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-  proxyLog(`[stream ${streamId}] 开始 (Anthropic 透传) model=${backend.modelName}`);
+  proxyLog(`[stream ${streamId}] 开始 (Anthropic 透传) model=${backend.modelName} msgs=${bodyToSend.messages?.length || 0} tools=${bodyToSend.tools?.length || 0} hasSystem=${!!bodyToSend.system} maxTokens=${bodyToSend.max_tokens}`);
 
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
 
@@ -338,8 +338,8 @@ function streamAnthropicRelay(backend, anthropicBody, res, routingKey, category)
       let data = '';
       proxyRes.on('data', chunk => { data += chunk; });
       proxyRes.on('end', () => {
-        proxyLog(`[stream ${streamId}] 后端错误响应: ${data.substring(0, 300)}`);
-        res.write(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: `后端返回 ${proxyRes.statusCode}` } })}\n\n`);
+        proxyLog(`[stream ${streamId}] 后端错误 status=${proxyRes.statusCode} body=${data.substring(0, 500)}`);
+        res.write(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: `后端返回 ${proxyRes.statusCode}: ${data.substring(0, 200)}` } })}\n\n`);
         endStream('backend-non200');
       });
       return;

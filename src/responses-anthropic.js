@@ -91,7 +91,8 @@ function responsesToAnthropic(body) {
 
   // stream / max_tokens / temperature / top_p
   if (body.stream) result.stream = true;
-  if (body.max_output_tokens) result.max_tokens = body.max_output_tokens;
+  // Anthropic API 要求 max_tokens 必填，Responses 用 max_output_tokens，兜底 4096
+  result.max_tokens = body.max_output_tokens || 4096;
   if (body.temperature !== undefined) result.temperature = body.temperature;
   if (body.top_p !== undefined) result.top_p = body.top_p;
 
@@ -115,12 +116,12 @@ function responsesToAnthropic(body) {
     }
   }
 
-  // 合并连续的 user tool_result 消息
+  // 合并连续同 role 消息（Anthropic 要求 user/assistant 严格交替）
   const merged = [];
   for (const msg of messages) {
-    if (msg.role === 'user' && merged.length > 0) {
+    if (merged.length > 0) {
       const prev = merged[merged.length - 1];
-      if (prev.role === 'user' && isToolResultContent(prev.content) && isToolResultContent(msg.content)) {
+      if (prev.role === msg.role) {
         prev.content = [...prev.content, ...msg.content];
         continue;
       }
@@ -130,10 +131,6 @@ function responsesToAnthropic(body) {
 
   result.messages = merged;
   return result;
-}
-
-function isToolResultContent(content) {
-  return Array.isArray(content) && content.length > 0 && content[0].type === 'tool_result';
 }
 
 module.exports = { responsesToAnthropic };
