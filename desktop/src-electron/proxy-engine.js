@@ -145,6 +145,8 @@ function streamFetchBackend(backend, openaiBody, res, createTransformer, routing
   let clientDisconnected = false;
   let streamEnded = false;
   let firstDataTime = 0;
+  // 独立 usage 行 fallback（dashscope 把 usage 放在没有 choices 的独立 SSE 行）
+  let fallbackUsage = null;
 
   // SSE 心跳：发送标准 ping 事件，确保所有 SSE 解析器都能识别
   const heartbeat = setInterval(() => {
@@ -172,7 +174,11 @@ function streamFetchBackend(backend, openaiBody, res, createTransformer, routing
       } catch (e) { proxyLog(`[stream ${streamId}] 强制完成异常: ${e.message}`); }
     }
     // 记录用量
-    const stats = transformer.getStats();
+    let stats = transformer.getStats();
+    // fallback：某些后端（如 dashscope）把 usage 放在独立的 SSE 行，transformer 无法解析
+    if ((!stats || (stats.inputTokens === 0 && stats.outputTokens === 0)) && fallbackUsage) {
+      stats = fallbackUsage;
+    }
     if (stats && (stats.inputTokens > 0 || stats.outputTokens > 0)) {
       logUsage({
         model: modelKey,
@@ -238,6 +244,14 @@ function streamFetchBackend(backend, openaiBody, res, createTransformer, routing
         }
         try {
           const parsed = JSON.parse(dataStr);
+          // 独立 usage 行（dashscope 把 usage 放在没有 choices 的独立 SSE 行）
+          if (parsed.usage && !parsed.choices?.[0]) {
+            fallbackUsage = {
+              inputTokens: parsed.usage.prompt_tokens || 0,
+              outputTokens: parsed.usage.completion_tokens || 0,
+              cachedInputTokens: parsed.usage.prompt_tokens_details?.cached_tokens || parsed.usage.prompt_cache_hit_tokens || 0,
+            };
+          }
           const events = transformer.processChunk(parsed);
           for (const evt of events) res.write(evt);
         } catch { /* ignore */ }
