@@ -69,6 +69,7 @@ function chatToResponses(chatBody) {
       input_tokens: usage.prompt_tokens || 0,
       output_tokens: usage.completion_tokens || 0,
       total_tokens: total || 0,
+      cached_input_tokens: usage.prompt_tokens_details?.cached_tokens || usage.prompt_cache_hit_tokens || 0,
     },
   };
 }

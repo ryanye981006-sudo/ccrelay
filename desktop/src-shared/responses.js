@@ -251,6 +251,7 @@ function responsesToChat(body) {
   const chatBody = {
     model: body.model?.replace('[1m]', ''),
     messages,
+    enable_prompt_cache: true,
   };
 
   // max_output_tokens → max_tokens

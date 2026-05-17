@@ -342,6 +342,7 @@ class ResponsesStreamTransformer {
             input_tokens: this.inputTokens,
             output_tokens: this.outputTokens,
             total_tokens: this.inputTokens + this.outputTokens,
+            cached_input_tokens: this.cachedInputTokens,
           },
         },
       }));

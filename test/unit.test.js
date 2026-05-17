@@ -119,7 +119,7 @@ test('stream 和 stop_sequences 透传', () => {
 
 test('图片消息转换', () => {
   const result = anthropicToOpenAI({
-    model: 'glm-5.1',
+    model: 'glm-5v-turbo',
     messages: [{
       role: 'user',
       content: [

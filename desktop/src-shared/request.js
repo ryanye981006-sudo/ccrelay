@@ -144,6 +144,7 @@ function anthropicToOpenAI(anthropicBody) {
   const openaiBody = {
     model: anthropicBody.model?.replace('[1m]', ''),
     messages: openaiMessages,
+    enable_prompt_cache: true,
   };
 
   if (anthropicBody.max_tokens) {

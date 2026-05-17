@@ -329,6 +329,9 @@ function streamAnthropicRelay(backend, anthropicBody, res, routingKey, category)
 
   let buffer = '';
   let streamEnded = false;
+  let sseBuffer = '';
+  let currentEvent = '';
+  let usageStats = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
 
   const heartbeat = setInterval(() => {
     if (!streamEnded) {
@@ -340,7 +343,17 @@ function streamAnthropicRelay(backend, anthropicBody, res, routingKey, category)
     if (streamEnded) return;
     streamEnded = true;
     clearInterval(heartbeat);
-    proxyLog(`[stream ${streamId}] 结束 reason=${reason}`);
+    // 记录用量（从 SSE 事件中提取）
+    if (usageStats.inputTokens > 0 || usageStats.outputTokens > 0) {
+      logUsage({
+        model: routingKey || backend.modelName,
+        category: category,
+        inputTokens: usageStats.inputTokens,
+        cachedInputTokens: usageStats.cachedInputTokens,
+        outputTokens: usageStats.outputTokens,
+      });
+    }
+    proxyLog(`[stream ${streamId}] 结束 reason=${reason} usage=${JSON.stringify(usageStats)}`);
     try { res.end(); } catch {}
   };
 
@@ -365,9 +378,32 @@ function streamAnthropicRelay(backend, anthropicBody, res, routingKey, category)
       return;
     }
 
-    // 透传 SSE 数据
+    // 透传 SSE 数据 + 解析 Anthropic 事件提取 usage
     proxyRes.on('data', (chunk) => {
       try { res.write(chunk); } catch {}
+
+      // 解析 Anthropic SSE 事件提取 usage 用于 logUsage
+      sseBuffer += chunk.toString();
+      const lines = sseBuffer.split('\n');
+      sseBuffer = lines.pop() || '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('event:')) {
+          currentEvent = trimmed.substring(6);
+        } else if (trimmed.startsWith('data:')) {
+          try {
+            const data = JSON.parse(trimmed.substring(5));
+            if (currentEvent === 'message_start' && data.message?.usage?.input_tokens) {
+              usageStats.inputTokens = data.message.usage.input_tokens;
+            }
+            if (currentEvent === 'message_delta' && data.usage) {
+              usageStats.outputTokens = data.usage.output_tokens || usageStats.outputTokens;
+              usageStats.inputTokens = data.usage.input_tokens || usageStats.inputTokens;
+              usageStats.cachedInputTokens = data.usage.cache_read_input_tokens || usageStats.cachedInputTokens;
+            }
+          } catch {}
+        }
+      }
     });
 
     proxyRes.on('end', () => {

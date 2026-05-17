@@ -53,17 +53,19 @@ class ResponsesStreamTransformer {
   processChunk(chunk) {
     if (this.finished) return [];
 
-    const choice = chunk.choices?.[0];
-    if (!choice) return [];
-
-    const delta = choice.delta || {};
-    const finishReason = choice.finish_reason;
+    // 先从顶层提取 usage（某些后端如 dashscope 把 usage 放在独立的 SSE 行，不含 choices）
     const usage = chunk.usage;
     if (usage) {
       this.inputTokens = usage.prompt_tokens || 0;
       this.outputTokens = usage.completion_tokens || 0;
       this.cachedInputTokens = usage.prompt_tokens_details?.cached_tokens || usage.prompt_cache_hit_tokens || 0;
     }
+
+    const choice = chunk.choices?.[0];
+    if (!choice) return [];
+
+    const delta = choice.delta || {};
+    const finishReason = choice.finish_reason;
 
     // 预处理器：从 delta.content 剥离 <think> 标签，转为 delta.reasoning_content
     // 后端流式返回 <think>\n...\n</think>\n... 格式，需拆分为 reasoning + content
@@ -340,6 +342,7 @@ class ResponsesStreamTransformer {
             input_tokens: this.inputTokens,
             output_tokens: this.outputTokens,
             total_tokens: this.inputTokens + this.outputTokens,
+            cached_input_tokens: this.cachedInputTokens,
           },
         },
       }));
