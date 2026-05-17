@@ -100,7 +100,7 @@ function fetchBackend(backend, openaiBody) {
     timeout: 120000,
     rejectUnauthorized: false,
   };
-  proxyLog(`[proxy] → POST ${url.hostname}${options.path} model=${backend.modelName}`);
+  proxyLog(`[proxy] → POST ${url.hostname}${options.path} model=${backend.modelName} enable_prompt_cache=${bodyToSend.enable_prompt_cache}`);
 
   return new Promise((resolve, reject) => {
     const proxyReq = transport.request(options, (proxyRes) => {
@@ -127,6 +127,8 @@ function streamFetchBackend(backend, openaiBody, res, createTransformer, routing
   const transport = isHttps ? https : http;
   const bodyToSend = { ...openaiBody, model: backend.modelName };
   const body = JSON.stringify(bodyToSend);
+  // 诊断：打印关键请求参数
+  proxyLog(`[stream] 请求参数: enable_prompt_cache=${bodyToSend.enable_prompt_cache} model=${bodyToSend.model} stream=${bodyToSend.stream} tools=${bodyToSend.tools?.length || 0} keys=${Object.keys(bodyToSend).join(',')}`);
   const options = {
     hostname: url.hostname, port: url.port || (isHttps ? 443 : 80),
     path: url.pathname + url.search, method: 'POST',
@@ -177,6 +179,7 @@ function streamFetchBackend(backend, openaiBody, res, createTransformer, routing
     let stats = transformer.getStats();
     // fallback：某些后端（如 dashscope）把 usage 放在独立的 SSE 行
     if (fallbackUsage) {
+      if (stats.inputTokens === 0) stats.inputTokens = fallbackUsage.inputTokens;
       if (stats.outputTokens === 0) stats.outputTokens = fallbackUsage.outputTokens;
       if (stats.cachedInputTokens === 0) stats.cachedInputTokens = fallbackUsage.cachedInputTokens;
       proxyLog(`[stream ${streamId}] fallback 合并 usage=${JSON.stringify(fallbackUsage)}`);
@@ -334,7 +337,7 @@ function streamAnthropicRelay(backend, anthropicBody, res, routingKey, category)
   let streamEnded = false;
   let sseBuffer = '';
   let currentEvent = '';
-  let usageStats = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
+  let usageStats = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, baseInputTokens: 0 };
 
   const heartbeat = setInterval(() => {
     if (!streamEnded) {
@@ -346,7 +349,11 @@ function streamAnthropicRelay(backend, anthropicBody, res, routingKey, category)
     if (streamEnded) return;
     streamEnded = true;
     clearInterval(heartbeat);
-    // 记录用量（从 SSE 事件中提取）
+    // 归一化 inputTokens：Anthropic 协议 input_tokens 仅计非缓存部分，需加上 cache_read 才是总输入
+    // OpenAI 协议 prompt_tokens 已含缓存，无需额外处理
+    const totalInput = usageStats.baseInputTokens + usageStats.cachedInputTokens;
+    if (totalInput > 0) usageStats.inputTokens = totalInput;
+    // 记录用量
     if (usageStats.inputTokens > 0 || usageStats.outputTokens > 0) {
       logUsage({
         model: routingKey || backend.modelName,
@@ -396,13 +403,20 @@ function streamAnthropicRelay(backend, anthropicBody, res, routingKey, category)
         } else if (trimmed.startsWith('data:')) {
           try {
             const data = JSON.parse(trimmed.substring(5));
-            if (currentEvent === 'message_start' && data.message?.usage?.input_tokens) {
-              usageStats.inputTokens = data.message.usage.input_tokens;
+            if (currentEvent === 'message_start' && data.message?.usage) {
+              // DashScope Anthropic 端点: input_tokens 仅计非缓存部分（不含 cache_read）
+              usageStats.baseInputTokens = data.message.usage.input_tokens || 0;
+              usageStats.inputTokens = usageStats.baseInputTokens;
+              proxyLog(`[stream ${streamId}] Anthropic SSE message_start: input_tokens=${data.message.usage.input_tokens} cache_creation=${data.message.usage.cache_creation_input_tokens} cache_read=${data.message.usage.cache_read_input_tokens}`);
             }
             if (currentEvent === 'message_delta' && data.usage) {
               usageStats.outputTokens = data.usage.output_tokens || usageStats.outputTokens;
-              usageStats.inputTokens = data.usage.input_tokens || usageStats.inputTokens;
               usageStats.cachedInputTokens = data.usage.cache_read_input_tokens || usageStats.cachedInputTokens;
+              proxyLog(`[stream ${streamId}] Anthropic SSE message_delta: output_tokens=${data.usage.output_tokens} input_tokens=${data.usage.input_tokens} cache_read=${data.usage.cache_read_input_tokens}`);
+              // 如果 message_delta 更新了 input_tokens，同步更新基数
+              if (data.usage.input_tokens && data.usage.input_tokens > usageStats.baseInputTokens) {
+                usageStats.baseInputTokens = data.usage.input_tokens;
+              }
             }
           } catch {}
         }
@@ -655,7 +669,8 @@ function createCCServer(port) {
               if (result.body && result.body.usage) {
                 logUsage({
                   model: anthropicBody.model, category: 'claude',
-                  inputTokens: result.body.usage.input_tokens || 0,
+                  // Anthropic 协议 input_tokens 仅计非缓存部分，归一化为总输入
+                  inputTokens: (result.body.usage.input_tokens || 0) + (result.body.usage.cache_read_input_tokens || 0),
                   cachedInputTokens: result.body.usage.cache_read_input_tokens || 0,
                   outputTokens: result.body.usage.output_tokens || 0
                 });

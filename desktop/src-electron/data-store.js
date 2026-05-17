@@ -470,6 +470,13 @@ function logUsage(record) {
   } catch {
     data = [];
   }
+  // 旧版本数据修正：Anthropic 端点的旧记录 inputTokens 不含缓存，导致 ratio>100%
+  // 修正规则：如果 inputTokens < cachedInputTokens 且 category=claude，说明 inputTokens 仅计非缓存部分
+  for (const r of data) {
+    if (r.category === 'claude' && r.inputTokens < (r.cachedInputTokens || 0) && (r.cachedInputTokens || 0) > 0) {
+      r.inputTokens = r.inputTokens + (r.cachedInputTokens || 0);
+    }
+  }
   data.push({
     timestamp: record.timestamp || Date.now(),
     model: record.model,
