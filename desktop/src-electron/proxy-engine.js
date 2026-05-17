@@ -175,9 +175,11 @@ function streamFetchBackend(backend, openaiBody, res, createTransformer, routing
     }
     // 记录用量
     let stats = transformer.getStats();
-    // fallback：某些后端（如 dashscope）把 usage 放在独立的 SSE 行，transformer 无法解析
-    if ((!stats || (stats.inputTokens === 0 && stats.outputTokens === 0)) && fallbackUsage) {
-      stats = fallbackUsage;
+    // fallback：某些后端（如 dashscope）把 usage 放在独立的 SSE 行
+    if (fallbackUsage) {
+      if (stats.outputTokens === 0) stats.outputTokens = fallbackUsage.outputTokens;
+      if (stats.cachedInputTokens === 0) stats.cachedInputTokens = fallbackUsage.cachedInputTokens;
+      proxyLog(`[stream ${streamId}] fallback 合并 usage=${JSON.stringify(fallbackUsage)}`);
     }
     if (stats && (stats.inputTokens > 0 || stats.outputTokens > 0)) {
       logUsage({
@@ -251,6 +253,7 @@ function streamFetchBackend(backend, openaiBody, res, createTransformer, routing
               outputTokens: parsed.usage.completion_tokens || 0,
               cachedInputTokens: parsed.usage.prompt_tokens_details?.cached_tokens || parsed.usage.prompt_cache_hit_tokens || 0,
             };
+            proxyLog(`[stream ${streamId}] 独立 usage 行: prompt_tokens=${fallbackUsage.inputTokens} completion_tokens=${fallbackUsage.outputTokens} cached_tokens=${fallbackUsage.cachedInputTokens} details=${JSON.stringify(parsed.usage.prompt_tokens_details)}`);
           }
           const events = transformer.processChunk(parsed);
           for (const evt of events) res.write(evt);

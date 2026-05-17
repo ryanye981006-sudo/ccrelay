@@ -347,6 +347,8 @@ async function cleanupAndQuit() {
   if (codexServer) await stopServer(codexServer);
   if (ccServer) await stopServer(ccServer);
   app.quit();
+  // 兜底：2 秒后强制退出，确保托盘退出不残留进程
+  setTimeout(() => process.exit(0), 2000);
 }
 
 app.whenReady().then(async () => {
